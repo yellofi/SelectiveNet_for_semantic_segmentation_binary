@@ -5,7 +5,6 @@ import cv2
 import numpy as np
 from random import shuffle
 from model_laplacian import *
-# from model_laplacian.laplacian import *
 import multiprocessing
 import time
 from multiprocessing import Pool, Manager
@@ -175,7 +174,6 @@ def read_regions_semi(params):
     
     except Exception as e:
         return e
-    
 
 def generate_patch(args, slide_file, target_mag = 200):
     # slide_name, _organ, mpp, slide_dir, _, _, _, _, _ = line
@@ -203,7 +201,6 @@ def generate_patch(args, slide_file, target_mag = 200):
     try: os.mkdir(os.path.join(_save_dir, f'x{target_mag}'))
     except: print(f"{os.path.join(_save_dir, f'x{target_mag}')} already exists")
 
-
     sliding_window = 1
     patch_size = args.patch_size
     mpp_ratio = slide_mag//target_mag
@@ -212,7 +209,6 @@ def generate_patch(args, slide_file, target_mag = 200):
     for i in range(sliding_window * width//(patch_size*mpp_ratio)):
         for j in range(sliding_window * height//(patch_size*mpp_ratio)):
             total_point.append((i, j))
-    
     
     # shuffle(total_point)
     num_total_patch = len(total_point)
@@ -231,8 +227,6 @@ def generate_patch(args, slide_file, target_mag = 200):
     result = pool.map_async(read_regions_semi, [(queue, queue2, allocated_points, patch_size, sliding_window, slide_path,
                                                  tissue_mask, tissue_th, mask_slide_ratio, mpp_ratio)
                                                 for allocated_points in split_points])
-
-    
 
     slide_thumbnail = slide.get_thumbnail((tissue_mask.shape[1], tissue_mask.shape[0])) 
     slide_thumbnail = slide_thumbnail.convert('RGB')
@@ -297,7 +291,5 @@ if __name__ == "__main__":
             taken = end_time - start_time
             print(f'time: {round(taken, 2)} sec')
             total_time += taken
-        if i == 0:
-            break
 
     print(f'total time: {round(total_time, 2)} sec')
