@@ -85,7 +85,7 @@ def make_mask(slide):
     Return:
         tissue_mask (np.array): output tissue mask.
         mask_slide_ratio (int): relative down magnification when compared to
-            original patch_size.
+            original size.
 
     """
 
@@ -103,25 +103,25 @@ def make_mask(slide):
 
     kernel_size = 11
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-    patch_ = slide_thumbnail.convert('HSV')
-    patch_ = np.array(patch_)
-    patch_ = patch_.astype(np.float32)
+    patch = slide_thumbnail.convert('HSV')
+    patch = np.array(patch)
+    patch = patch.astype(np.float32)
 
-    h_test = np.zeros((patch_.shape[0], patch_.shape[1]))
-    h_test[patch_[:, :, 0] > 180] = 1
-    h_test[patch_[:, :, 0] < 20] = 1
-    h_test[patch_[:, :, 0] == 0] = 0
+    h_test = np.zeros((patch.shape[0], patch.shape[1]))
+    h_test[patch[:, :, 0] > 180] = 1
+    h_test[patch[:, :, 0] < 20] = 1
+    h_test[patch[:, :, 0] == 0] = 0
 
-    s_test = np.zeros((patch_.shape[0], patch_.shape[1]))
-    s_test[patch_[:, :, 1] < 240] = 1
-    s_test[patch_[:, :, 1] < 20] = 0
+    s_test = np.zeros((patch.shape[0], patch.shape[1]))
+    s_test[patch[:, :, 1] < 240] = 1
+    s_test[patch[:, :, 1] < 20] = 0
 
-    v_test = np.zeros((patch_.shape[0], patch_.shape[1]))
-    v_test[patch_[:, :, 2] > 30] = 1
+    v_test = np.zeros((patch.shape[0], patch.shape[1]))
+    v_test[patch[:, :, 2] > 30] = 1
 
-    black_test = np.zeros((patch_.shape[0], patch_.shape[1]))
-    patch_ = np.array(slide_array, float)
-    patch_new = patch_[:, :, 0] + patch_[:, :, 1] + patch_[:, :, 2]
+    black_test = np.zeros((patch.shape[0], patch.shape[1]))
+    patch = np.array(slide_array, float)
+    patch_new = patch[:, :, 0] + patch[:, :, 1] + patch[:, :, 2]
     patch_new = patch_new / 3
     black_test[patch_new > 100] = 1
 
@@ -132,12 +132,12 @@ def make_mask(slide):
 
     return tissue_mask.astype(float), mask_slide_ratio
 
-def _make_patch(patch_):
-    patch_ = np.array(patch_)
-    patch_ = patch_.astype(np.float32)
-    patch_ = np.expand_dims(patch_, axis=0)
-    patch_ = np.ascontiguousarray(patch_, dtype=np.float32)
-    return patch_
+def _make_patch(patch):
+    patch = np.array(patch)
+    patch = patch.astype(np.float32)
+    patch = np.expand_dims(patch, axis=0)
+    patch = np.ascontiguousarray(patch, dtype=np.float32)
+    return patch
 
 def read_regions_semi(params):
 
