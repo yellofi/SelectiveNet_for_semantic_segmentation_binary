@@ -32,7 +32,10 @@ def parse_arguments():
     parser.add_argument('--patch_size', action="store", type=int,
                         default=1024, help='a width/height length of squared patches')
     parser.add_argument('--tissue_th', action="store", type=float,
-                        default=0.5, help='threshold to decide we use a patch_, proportion of valued-region of each patch_ mask')
+                        default=0.5, help='threshold about proportion of valued-region of each patch_ mask')
+
+    parser.add_argument('--blur_th', action="store", type=int,
+                        default=500, help='threshold about blurrity of each patch_')
 
     args = parser.parse_args()
     print('')
@@ -138,10 +141,10 @@ def _make_patch(patch_):
 
 def read_regions_semi(params):
 
-    queue, queue2, points, patch_size, window, slide_dir, tissue_mask, tissue_threshold, mask_slide_ratio, slide_mag, patch_mag = params
-    slide = openslide.OpenSlide(slide_dir)
+    queue, queue2, points, patch_size, window, slide_path, tissue_mask, tissue_threshold, mask_slide_ratio, mpp_ratio = params
+
+    slide = openslide.OpenSlide(slide_path)
     step_size = patch_size//window
-    mpp_ratio = slide_mag//patch_mag
 
     target_step_size = mpp_ratio*step_size
     mask_step_size = target_step_size//mask_slide_ratio
@@ -173,6 +176,7 @@ def read_regions_semi(params):
     except Exception as e:
         return e
     
+
 def generate_patch(args, slide_file, target_mag = 200):
     # slide_name, _organ, mpp, slide_dir, _, _, _, _, _ = line
     slide_path = args.data_dir + '/' + slide_file
@@ -183,7 +187,7 @@ def generate_patch(args, slide_file, target_mag = 200):
     slide_mag = int(args.wsl_mag)
 
     tissue_mask, mask_slide_ratio = make_tissue_mask(slide)
-    tissue_threshold = args.tissue_th
+    tissue_th = args.tissue_th
     # if mpp < 0.2:
     #     slide_mag = 800
     # elif mpp < 0.4:
@@ -192,21 +196,23 @@ def generate_patch(args, slide_file, target_mag = 200):
     #     slide_mag = 200
     
     _save_dir = os.path.join(args.save_dir, 'patch', slide_name)
+
+    try: os.makedirs(os.path.join(_save_dir))
+    except: print(f"{os.path.join(_save_dir)} already exists")
     
-    # try: os.makedirs(_save_dir)
-    # except: print(f"{_save_dir} already exists")
-    
-    try: os.makedirs(os.path.join(_save_dir, f'x{target_mag}'))
+    try: os.mkdir(os.path.join(_save_dir, f'x{target_mag}'))
     except: print(f"{os.path.join(_save_dir, f'x{target_mag}')} already exists")
 
 
-    patch_size = args.patch_size
-    batch_size = 64
     sliding_window = 1
+    patch_size = args.patch_size
+    mpp_ratio = slide_mag//target_mag
+
     total_point = []
-    for i in range(sliding_window * width//(patch_size*(slide_mag//target_mag))):
-        for j in range(sliding_window * height//(patch_size*(slide_mag//target_mag))):
+    for i in range(sliding_window * width//(patch_size*mpp_ratio)):
+        for j in range(sliding_window * height//(patch_size*mpp_ratio)):
             total_point.append((i, j))
+    
     
     # shuffle(total_point)
     num_total_patch = len(total_point)
@@ -223,11 +229,22 @@ def generate_patch(args, slide_file, target_mag = 200):
         split_points.append(total_point[ii::n_process])
 
     result = pool.map_async(read_regions_semi, [(queue, queue2, allocated_points, patch_size, sliding_window, slide_path,
-                                                 tissue_mask, tissue_threshold, mask_slide_ratio, slide_mag, target_mag)
+                                                 tissue_mask, tissue_th, mask_slide_ratio, mpp_ratio)
                                                 for allocated_points in split_points])
 
-    img_list, point_list, patch_list = [], [], []
     
+
+    slide_thumbnail = slide.get_thumbnail((tissue_mask.shape[1], tissue_mask.shape[0])) 
+    slide_thumbnail = slide_thumbnail.convert('RGB')
+    slide_ = np.array(slide_thumbnail, dtype=np.uint8)
+
+    mask_step_size = (mpp_ratio*(patch_size//sliding_window))//mask_slide_ratio
+
+    batch_size = 64
+    blur_th = args.blur_th 
+    img_list, point_list, patch_list = [], [], []
+
+    count = 0
     while True:
         if queue.empty():
             if not result.ready():
@@ -251,15 +268,18 @@ def generate_patch(args, slide_file, target_mag = 200):
                 for ii in range(len(patch_list)):
                     _x, _y = point_list[ii]
                     img = img_list[ii]
-                    if output[ii] > 500:
+                    if output[ii] > blur_th:
                         img.convert('RGB').save(os.path.join(_save_dir, 'x{}'.format(target_mag), slide_name + '_' + str(_x)+'_'+str(_y)+'.jpg'))
+                        slide_ = cv2.rectangle(slide_, (_x//mask_slide_ratio, _y//mask_slide_ratio), 
+                        (_x//mask_slide_ratio+mask_step_size, _y//mask_slide_ratio+mask_step_size), color=(0, 255, 0), thickness=2)
+                        count += 1
 
                 img_list, point_list, patch_list = [], [], []
     if not result.successful():
         print('Something wrong in result')
 
-    generated_patch_num = len(os.listdir(os.path.join(_save_dir, f'x{target_mag}')))
-    print(f'# of actual saved patch_: {generated_patch_num}')
+    cv2.imwrite(_save_dir + '/' + f'{slide_name}_x{target_mag}_tissue_th-{tissue_th}_blur_th-{blur_th}_num-{count}.jpg', slide_)
+    print(f'# of actual saved patch_: {count}')
     pool.close()
     pool.join()
     
@@ -269,7 +289,7 @@ if __name__ == "__main__":
 
     slide_list = sorted([i for i in os.listdir(args.data_dir) if 'svs' in i])
     total_time = 0
-    for slide_file in slide_list:
+    for i, slide_file in enumerate(slide_list):
         for target_mag in args.patch_mag:
             start_time = time.time()
             generate_patch(args, slide_file, target_mag)
@@ -277,5 +297,7 @@ if __name__ == "__main__":
             taken = end_time - start_time
             print(f'time: {round(taken, 2)} sec')
             total_time += taken
+        if i == 0:
+            break
 
     print(f'total time: {round(total_time, 2)} sec')
