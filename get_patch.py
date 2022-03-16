@@ -5,7 +5,6 @@ import cv2
 import numpy as np
 from random import shuffle
 from model_laplacian import *
-import multiprocessing
 import time
 from multiprocessing import Pool, Manager
 
@@ -32,7 +31,6 @@ def parse_arguments():
                         default=1024, help='a width/height length of squared patches')
     parser.add_argument('--tissue_th', action="store", type=float,
                         default=0.5, help='threshold about proportion of valued-region of each patch_ mask')
-
     parser.add_argument('--blur_th', action="store", type=int,
                         default=500, help='threshold about blurrity of each patch_')
 
