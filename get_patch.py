@@ -18,7 +18,7 @@ def parse_arguments():
                         default='/mnt/nfs0/jycho/SLIDE_DATA/록원재단/AT2/C-MET_slide', help='WSI data directory')
 
     parser.add_argument('--save_dir', action="store", type=str,
-                        default='/mnt/ssd1/SLIDE_DATA/록원재단/AT2/C-MET_slide', help='directory where it will save patches')
+                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide', help='directory where it will save patches')
 
     parser.add_argument('--mpp', action="store", type=int,
                         default=0.2532, help='millimeter per pixel')
@@ -179,17 +179,16 @@ def generate_patch(args, slide_file, target_mag = 200):
     slide_name = os.path.basename(slide_path)[:-4]
     slide = openslide.OpenSlide(slide_path)
     width, height = slide.dimensions
-    mpp = float(args.mpp)
-    slide_mag = int(args.wsl_mag)
+    slide_mag, mpp = int(args.wsl_mag), float(args.mpp)
 
     tissue_mask, mask_slide_ratio = make_tissue_mask(slide)
-    tissue_th = args.tissue_th
-    # if mpp < 0.2:
-    #     slide_mag = 800
-    # elif mpp < 0.4:
-    #     slide_mag = 400
-    # else:
-    #     slide_mag = 200
+
+    if target_mag == 400:
+        tissue_th = 0.3
+    elif target_mag == 200:
+        tissue_th = 0.1
+    else:
+        tissue_th = args.tissue_th
     
     _save_dir = os.path.join(args.save_dir, 'patch', slide_name)
 
