@@ -1,12 +1,21 @@
 import os
 from posixpath import basename
 import cv2
+import numpy as np
 
-img_dir = '/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/sample'
-mask_dir = os.path.join(img_dir, 'annotation')
-save_dir = '/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset'
 
-def extract_sample(img_path, mask_path, sample_size, overlap_rate = 0):
+def split_data(img_list):
+    
+    total_n = len(img_list)
+    
+    test_idx = np.random.choice(total_n, size = int(total_n*0.2), replace = False)
+    train_idx = np.setdiff1d(np.array([i for i in range(total_n)]), test_idx)
+    valid_idx = train_idx[np.random.choice(len(train_idx), size = int(total_n*0.2), replace = False)]
+    train_idx = np.setdiff1d(train_idx, valid_idx)
+
+    return train_idx, valid_idx, test_idx
+
+def extract_sample(img_path, mask_path, save_dir, sample_size, overlap_rate = 0):
 
     img_name = os.path.basename(img_path)[:-4]
     image = cv2.imread(img_path)
@@ -19,9 +28,9 @@ def extract_sample(img_path, mask_path, sample_size, overlap_rate = 0):
         for j in range(height//int(sample_size*(1-overlap_rate))):
             points.append((i, j))
 
-    _save_dir = os.path.join(save_dir, img_name)
-    try: os.makedirs(_save_dir)
-    except: print(f'{_save_dir} Already exists')
+    # _save_dir = os.path.join(save_dir, img_name)
+    # try: os.makedirs(_save_dir)
+    # except: print(f'{_save_dir} Already exists')
 
     image_ = image.copy()
     
@@ -40,29 +49,65 @@ def extract_sample(img_path, mask_path, sample_size, overlap_rate = 0):
             mask_ = mask[y_coor:y_coor+sample_size, \
                         x_coor:x_coor+sample_size]
 
-            cv2.imwrite(os.path.join(_save_dir, f'{img_name}_{i:03d}_sample.png'), img_)
-            cv2.imwrite(os.path.join(_save_dir, f'{img_name}_{i:03d}_label.png'), mask_)
+            cv2.imwrite(os.path.join(save_dir, f'{img_name}_{i:03d}_sample.png'), img_)
+            cv2.imwrite(os.path.join(save_dir, f'{img_name}_{i:03d}_label.png'), mask_)
 
             image_ = cv2.rectangle(image_, (x_coor, y_coor), 
                             (x_coor+sample_size, y_coor+sample_size), color=(0, 255, 0), thickness=2)
 
     print(f'# of extracted sample: {i}')
-    cv2.imwrite(os.path.join(save_dir, f'{img_name}_size-{sample_size}_overlap-{overlap_rate}.png'), image_)
+    
+    _save_dir = os.path.join(save_dir, 'visualization')
+    try: os.makedirs(_save_dir)
+    except: pass
+    
+    cv2.imwrite(os.path.join(_save_dir, f'{img_name}_size-{sample_size}_overlap-{overlap_rate}.png'), image_)
 
+img_dir = '/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/sample'
+mask_dir = os.path.join(img_dir, 'annotation')
+save_dir = '/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset'
 
 if __name__ == '__main__':
     img_list = sorted([img for img in os.listdir(img_dir) if '.png' in img])
     mask_list = sorted([mask for mask in os.listdir(mask_dir) if '.png' in mask])
 
+    try: bool(img_list == mask_list)
+    except: print("Check each pair of image and mask")        
+    
     print(f'image directory: {img_dir}')
     print(f'mask directory: {mask_dir}')
 
-    for i, (img, mask) in enumerate(zip(img_list, mask_list)):
-        print(f'{i} | image: {img} | mask: {mask}')
-        
-        img_path = os.path.join(img_dir, img)
-        mask_path = os.path.join(mask_dir, mask)
+    train_idx, valid_idx, test_idx = split_data(img_list)
 
-        extract_sample(img_path, mask_path, sample_size = 256, overlap_rate = 0.5)
+    print(f'train_idx ({len(train_idx)}) = {train_idx}')
+    print(f'valid_idx ({len(valid_idx)}) = {valid_idx}')
+    print(f'test_idx ({len(test_idx)}) = {test_idx}')
 
+    print("")
+    print(f'training dataset | size = 256x256 | overlap = 0.5')
+    for i, t_idx in enumerate(train_idx):
+        img, mask = img_list[t_idx], mask_list[t_idx]
+        print(f'{i+1} | image: {img} | mask: {mask}')
+        img_path, mask_path = os.path.join(img_dir, img), os.path.join(mask_dir, mask)
+        extract_sample(img_path, mask_path, save_dir + '/train', sample_size = 256, overlap_rate = 0.5)
 
+    print("")
+    print(f'validation dataset | size = 256x256 | overlap = 0')
+    for i, v_idx in enumerate(valid_idx):
+        img, mask = img_list[v_idx], mask_list[v_idx]
+        print(f'{i+1} | image: {img} | mask: {mask}')
+        img_path, mask_path = os.path.join(img_dir, img), os.path.join(mask_dir, mask)
+        extract_sample(img_path, mask_path, save_dir + '/valid', sample_size = 256, overlap_rate = 0)
+
+    print("")
+    print(f'testing dataset | size = 256x256 | overlap = 0')
+    for i, t_idx in enumerate(test_idx):
+        img, mask = img_list[t_idx], mask_list[t_idx]
+        print(f'{i+1} | image: {img} | mask: {mask}')
+        img_path, mask_path = os.path.join(img_dir, img), os.path.join(mask_dir, mask)
+        extract_sample(img_path, mask_path, save_dir + '/test', sample_size = 256, overlap_rate = 0)
+
+    print("")
+    print(f'# of training dataset = {(len(os.listdir(save_dir + "/train"))-1)//2}')
+    print(f'# of validation dataset = {(len(os.listdir(save_dir + "/valid"))-1)//2}')
+    print(f'# of testing dataset = {(len(os.listdir(save_dir + "/test"))-1)//2}')
