@@ -82,30 +82,34 @@ if __name__ == '__main__':
     print(f'train_idx ({len(train_idx)}) = {train_idx}')
     print(f'valid_idx ({len(valid_idx)}) = {valid_idx}')
     print(f'test_idx ({len(test_idx)}) = {test_idx}')
+    
+    sample_size = 256
+    tr_overlap_rate = 0.5
+    test_overlap_rate = 0
 
     print("")
-    print(f'training dataset | size = 256x256 | overlap = 0.5')
+    print(f'training dataset | size = {sample_size}x{sample_size} | overlap = {tr_overlap_rate}')
     for i, t_idx in enumerate(train_idx):
         img, mask = img_list[t_idx], mask_list[t_idx]
         print(f'{i+1} | image: {img} | mask: {mask}')
         img_path, mask_path = os.path.join(img_dir, img), os.path.join(mask_dir, mask)
-        extract_sample(img_path, mask_path, save_dir + '/train', sample_size = 256, overlap_rate = 0.5)
+        extract_sample(img_path, mask_path, save_dir + '/train', sample_size = sample_size, overlap_rate = tr_overlap_rate)
 
     print("")
-    print(f'validation dataset | size = 256x256 | overlap = 0')
+    print(f'validation dataset | size = {sample_size}x{sample_size} | overlap = {test_overlap_rate}')
     for i, v_idx in enumerate(valid_idx):
         img, mask = img_list[v_idx], mask_list[v_idx]
         print(f'{i+1} | image: {img} | mask: {mask}')
         img_path, mask_path = os.path.join(img_dir, img), os.path.join(mask_dir, mask)
-        extract_sample(img_path, mask_path, save_dir + '/valid', sample_size = 256, overlap_rate = 0)
+        extract_sample(img_path, mask_path, save_dir + '/valid', sample_size = sample_size, overlap_rate = test_overlap_rate)
 
     print("")
-    print(f'testing dataset | size = 256x256 | overlap = 0')
+    print(f'testing dataset | size = {sample_size}x{sample_size} | overlap = {test_overlap_rate}')
     for i, t_idx in enumerate(test_idx):
         img, mask = img_list[t_idx], mask_list[t_idx]
         print(f'{i+1} | image: {img} | mask: {mask}')
         img_path, mask_path = os.path.join(img_dir, img), os.path.join(mask_dir, mask)
-        extract_sample(img_path, mask_path, save_dir + '/test', sample_size = 256, overlap_rate = 0)
+        extract_sample(img_path, mask_path, save_dir + '/test', sample_size = sample_size, overlap_rate = test_overlap_rate)
 
     print("")
     print(f'# of training dataset = {(len(os.listdir(save_dir + "/train"))-1)//2}')
