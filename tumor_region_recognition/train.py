@@ -115,7 +115,7 @@ def train(rank, data_loader, lr, num_epoch):
             writer_train.close()
             writer_val.close()
 
-            print('epoch %04d / %04d | train_loss %.05f | valid_loss %.05f'%(epoch, num_epoch, np.mean(tr_loss_arr, np.mean(val_loss_arr))))
+            print('epoch %04d / %04d | train_loss %.05f | valid_loss %.05f'%(epoch, num_epoch, np.mean(tr_loss_arr), np.mean(val_loss_arr)))
 
         net_save(ckpt_dir=ckpt_dir, net = net, optim = optim, epoch = epoch)
 
