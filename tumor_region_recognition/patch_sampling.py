@@ -28,9 +28,8 @@ def extract_sample(img_path, mask_path, save_dir, sample_size, overlap_rate = 0)
         for j in range(height//int(sample_size*(1-overlap_rate))):
             points.append((i, j))
 
-    # _save_dir = os.path.join(save_dir, img_name)
-    # try: os.makedirs(_save_dir)
-    # except: print(f'{_save_dir} Already exists')
+    try: os.makedirs(save_dir)
+    except: pass
 
     image_ = image.copy()
     
