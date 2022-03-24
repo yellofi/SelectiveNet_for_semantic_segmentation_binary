@@ -1,4 +1,6 @@
-import os, cv2
+import os
+# import cv2
+from PIL import Image
 import numpy as np
 import torch
 from typing import Tuple
@@ -29,9 +31,13 @@ class Dataset(torch.utils.data.Dataset):
         return len(self.label_list)
 
     def __getitem__(self, index):
+        input = Image.open(os.path.join(self.data_dir, self.img_list[index]))
+        label = Image.open(os.path.join(self.data_dir, self.label_list[index])).convert("L")
+        
+        input, label = np.array(input), np.array(label)
 
-        input = cv2.imread(os.path.join(self.data_dir, self.img_list[index]))
-        label = cv2.imread(os.path.join(self.data_dir, self.label_list[index]), cv2.IMREAD_GRAYSCALE)
+        # input = cv2.imread(os.path.join(self.data_dir, self.img_list[index]))
+        # label = cv2.imread(os.path.join(self.data_dir, self.label_list[index]), cv2.IMREAD_GRAYSCALE)
 
         input, label = input/255.0, label/255.0
         input, label = input.astype(np.float32), label.astype(np.float32)
