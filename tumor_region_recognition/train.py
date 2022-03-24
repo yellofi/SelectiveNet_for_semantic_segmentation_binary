@@ -1,12 +1,10 @@
 import argparse
 import torch
-from torch import nn, optim
-from torch.distributed import Backend
 from torch.utils.tensorboard import SummaryWriter
-from torch.nn.parallel.distributed import DistributedDataParallel as DDP
-
-import torch.distributed as dist
-import torch.multiprocessing as mp
+# from torch.distributed import Backend
+# from torch.nn.parallel.distributed import DistributedDataParallel as DDP
+# import torch.distributed as dist
+# import torch.multiprocessing as mp
 
 from data_utils import *
 from model import *
@@ -38,10 +36,10 @@ def train(rank, data_loader, lr, num_epoch):
 
     device = torch.device(f'cuda:{rank}')
     net = UNet().to(device)
-    net = DDP(net, device_ids=[rank], output_device=rank)
+    # net = DDP(net, device_ids=[rank], output_device=rank)
 
     optim = torch.optim.Adam(net.parameters(), lr = lr)
-    fn_loss = nn.BCEWithLogitsLoss().to(device)
+    fn_loss = torch.nn.BCEWithLogitsLoss().to(device)
 
     fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
     fn_denorm = lambda x, mean, std : (x*std) + mean
@@ -57,10 +55,12 @@ def train(rank, data_loader, lr, num_epoch):
         net.train()
         loss_arr = []
 
-        for batch, data in enumerate(loader_train, 1): # 1은 뭐니 > index start point
+        for batch, data in enumerate(loader_train, 1):
             # forward
-            label = data['label'].to(device, non_blocking=True)   # 데이터 device로 올리기     
-            inputs = data['input'].to(device, non_blocking=True)
+            # label = data['label'].to(device, non_blocking=True)   
+            # inputs = data['input'].to(device, non_blocking=True)
+            label = data['label'].to(device)
+            inputs = data['input'].to(device)
             output = net(inputs) 
 
             # backward
@@ -89,9 +89,11 @@ def train(rank, data_loader, lr, num_epoch):
         loss_arr = []
 
         for batch, data in enumerate(loader_val,1):
-            # forward
-            label = data['label'].to(device, non_blocking=True)
-            inputs = data['input'].to(device, non_blocking=True)
+            # # forward
+            # label = data['label'].to(device, non_blocking=True)
+            # inputs = data['input'].to(device, non_blocking=True)
+            label = data['label'].to(device)
+            inputs = data['input'].to(device)
             output = net(inputs)
 
             # loss 
@@ -122,7 +124,7 @@ def main(rank, world_size):
     batch_size = 16
     num_epoch = 100
 
-    data_loader = create_data_loader(data_dir=data_dir, rank=rank, world_size=world_size, batch_size=batch_size)
+    data_loader = create_data_loader(data_dir=data_dir, batch_size=batch_size)
     train(rank=rank, data_loader=data_loader, lr=lr, num_epoch=num_epoch)
 
 
@@ -135,18 +137,18 @@ if __name__ == '__main__':
     
 
     # torch.cuda.set_device(rank)
-    # torch.distributed.init_process_group(backend=Backend.NCCL, init_method='env://')
-
-    os.environ['MASTER_ADDR'] = '192.168.0.38'
-    os.environ['MASTER_PORT'] = '10011'
-
-    # dist.init_process_group(backend=Backend.NCCL, rank=rank, world_size=world_size)
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
-
     
-    mp.spawn(main, 
-            args=(world_size,),
-            nprocs=world_size,
-            join=True)
+    # os.environ['MASTER_ADDR'] = '192.168.0.38'
+    # os.environ['MASTER_PORT'] = '10011'
+
+    # dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+
+    main(rank=rank)
+   
+    
+    # mp.spawn(main, 
+    #         args=(world_size,),
+    #         nprocs=world_size,
+    #         join=True)
     
     

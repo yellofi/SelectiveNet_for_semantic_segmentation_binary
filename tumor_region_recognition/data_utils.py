@@ -91,23 +91,40 @@ class RandomFlip(object):
 
         return data
 
-# get data torch loaders which have their own sampler
+# get dataloaders
 
-def create_data_loader(data_dir: str, rank: int, world_size: int, batch_size: int) -> Tuple[DataLoader, DataLoader]: 
+def create_data_loader(data_dir: str, batch_size: int) -> Tuple[DataLoader, DataLoader]: 
 
     transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
 
     dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train)
-    sampler_train = DistributedSampler(dataset_train, num_replicas=world_size, rank=rank, shuffle=True, seed=42)
-    loader_train = DataLoader(dataset_train, batch_size = batch_size, num_workers=32, sampler = sampler_train, pin_memory=True)
+    loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
 
     transform_val = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
 
     dataset_val = Dataset(data_dir=os.path.join(data_dir, 'valid'), transform = transform_val)
-    sampler_val = DistributedSampler(dataset_val, num_replicas=world_size, rank=rank, shuffle=True, seed=42)
-    loader_val = DataLoader(dataset_val, batch_size = batch_size, num_workers=32, sampler = sampler_val, pin_memory=True)
+    loader_val = DataLoader(dataset_val, batch_size = batch_size, shuffle=True)
 
     return loader_train, loader_val
+
+
+# get dataloaders which have their own sampler
+
+# def create_data_loader(data_dir: str, rank: int, world_size: int, batch_size: int) -> Tuple[DataLoader, DataLoader]: 
+
+#     transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
+
+#     dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train)
+#     sampler_train = DistributedSampler(dataset_train, num_replicas=world_size, rank=rank, shuffle=True, seed=42)
+#     loader_train = DataLoader(dataset_train, batch_size = batch_size, num_workers=32, sampler = sampler_train, pin_memory=True)
+
+#     transform_val = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
+
+#     dataset_val = Dataset(data_dir=os.path.join(data_dir, 'valid'), transform = transform_val)
+#     sampler_val = DistributedSampler(dataset_val, num_replicas=world_size, rank=rank, shuffle=True, seed=42)
+#     loader_val = DataLoader(dataset_val, batch_size = batch_size, num_workers=32, sampler = sampler_val, pin_memory=True)
+
+#     return loader_train, loader_val
 
 
 
