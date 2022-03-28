@@ -9,20 +9,19 @@ from torch.utils.tensorboard import SummaryWriter
 from data_utils import *
 from model import *
 
-data_dir = '/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset'
-ckpt_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/checkpoint'
-log_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/log'
-
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--data_dir', type=str, help='WSI data directory')
-    parser.add_argument('--ckpt_dir', type=str, help='directory where models would be saved')
-    parser.add_argument('--log_dir', type=str, help='directory where log of model training would be saved')
+    # parser.add_argument('--data_dir', type=str, help='WSI data directory')
+    # parser.add_argument('--ckpt_dir', type=str, help='directory where models would be saved')
+    # parser.add_argument('--log_dir', type=str, help='directory where log of model training would be saved')
     parser.add_argument('--local_rank', type=int, default=0, help='local rank')
-
+    parser.add_argument('--fold', type = int, default = 1, help = 'which fold in 5-fold cv')
+    
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--n_epoch', type=int, default=100)
+
 
     args = parser.parse_args()
     print('')
@@ -121,10 +120,6 @@ def train(rank, data_loader, lr, num_epoch):
 
 def main(rank, world_size):
 
-    lr = 1e-3
-    batch_size = 16
-    num_epoch = 100
-
     print(f'# of gpu: {world_size}, gpu id: {rank}\n')
 
     data_loader = create_data_loader(data_dir=data_dir, batch_size=batch_size)
@@ -133,9 +128,24 @@ def main(rank, world_size):
 
 if __name__ == '__main__':
 
-    # args = parse_arguments()
+    args = parse_arguments()
+    
+    # data_dir = '/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset'
+    # ckpt_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/checkpoint'
+    # log_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/log'
 
-    rank = 3
+    data_dir = f'/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset/{args.fold}-fold'
+    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/{args.fold}-fold/checkpoint'
+    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/{args.fold}-fold/log'
+    
+    # try: os.makedirs(ckpt_dir); os.makedirs(log_dir)
+    # except: pass
+
+    lr = args.lr
+    batch_size = args.batch_size
+    num_epoch = args.n_epoch
+
+    rank = args.local_rank
     world_size = torch.cuda.device_count() #8
 
     torch.cuda.set_device(rank)
