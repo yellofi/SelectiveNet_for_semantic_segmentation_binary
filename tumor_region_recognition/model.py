@@ -16,7 +16,7 @@ def net_save(ckpt_dir,net,optim,epoch):
     torch.save({'net':net.state_dict(),'optim':optim.state_dict()},'%s/model_epoch%d.pth'%(ckpt_dir,epoch))
 
 # 네트워크 불러오기
-def net_load(ckpt_dir,net,optim):
+def net_load(ckpt_dir,net,optim,device):
     if not os.path.exists(ckpt_dir): # 저장된 네트워크가 없다면 인풋을 그대로 반환
         epoch = 0
         return net, optim, epoch
@@ -24,7 +24,7 @@ def net_load(ckpt_dir,net,optim):
     ckpt_lst = os.listdir(ckpt_dir) # ckpt_dir 아래 있는 모든 파일 리스트를 받아온다
     ckpt_lst.sort(key = lambda f : int(''.join(filter(str.isdigit,f))))
 
-    dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]))
+    dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location=device)
 
     net.load_state_dict(dict_model['net'])
     optim.load_state_dict(dict_model['optim'])
