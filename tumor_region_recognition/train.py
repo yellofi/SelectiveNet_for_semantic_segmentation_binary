@@ -48,7 +48,7 @@ def train(rank, data_loader, lr, num_epoch):
     writer_val = SummaryWriter(log_dir = os.path.join(log_dir, 'valid'))
 
     start_epoch = 0
-    net, optim, start_epoch = net_load(ckpt_dir = ckpt_dir, net = net, optim = optim) # 저장된 네트워크 불러오기
+    net, optim, start_epoch = net_load(ckpt_dir=ckpt_dir, net=net, optim=optim, device=device) # 저장된 네트워크 불러오기
 
     for epoch in range(start_epoch+1,start_epoch+num_epoch +1):
         net.train()
@@ -114,7 +114,7 @@ def train(rank, data_loader, lr, num_epoch):
             writer_train.close()
             writer_val.close()
 
-            print('epoch %04d / %04d | train_loss %.05f | valid_loss %.05f'%(epoch, num_epoch, np.mean(tr_loss_arr), np.mean(val_loss_arr)))
+            print('epoch %04d / %04d | train_loss %.05f | valid_loss %.05f'%(epoch, num_epoch+epoch, np.mean(tr_loss_arr), np.mean(val_loss_arr)))
 
         net_save(ckpt_dir=ckpt_dir, net = net, optim = optim, epoch = epoch)
 
