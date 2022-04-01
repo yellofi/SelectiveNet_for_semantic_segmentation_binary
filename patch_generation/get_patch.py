@@ -260,7 +260,7 @@ def generate_patch(args, slide_file, target_mag = 200):
                     _x, _y = point_list[ii]
                     img = img_list[ii]
                     if output[ii] > blur_th:
-                        img.convert('RGB').save(os.path.join(_save_dir, 'x{}'.format(target_mag), slide_name + '_' + str(_x)+'_'+str(_y)+'.jpg'))
+                        # img.convert('RGB').save(os.path.join(_save_dir, 'x{}'.format(target_mag), slide_name + '_' + str(_x)+'_'+str(_y)+'.jpg'))
                         slide_ = cv2.rectangle(slide_, (_x//mask_slide_ratio, _y//mask_slide_ratio), 
                         (_x//mask_slide_ratio+mask_step_size, _y//mask_slide_ratio+mask_step_size), color=(0, 255, 0), thickness=2)
                         count += 1
@@ -268,8 +268,7 @@ def generate_patch(args, slide_file, target_mag = 200):
                 img_list, point_list, patch_list = [], [], []
     if not result.successful():
         print('Something wrong in result')
-
-    cv2.imwrite(_save_dir + '/' + f'{slide_name}_x{target_mag}_tissue_th-{tissue_th}_blur_th-{blur_th}_num-{count}.jpg', slide_)
+    cv2.imwrite(args.save_dir + '/patch' + f'/{slide_name}_x{target_mag}_tissue_th-{tissue_th}_blur_th-{blur_th}_num-{count}.jpg', cv2.cvtColor(slide_, cv2.COLOR_BGR2RGB))
     print(f'# of actual saved patch_: {count}')
     pool.close()
     pool.join()
