@@ -15,7 +15,7 @@ class Dataset(torch.utils.data.Dataset):
         self.data_dir = data_dir
         self.transform = transform
 
-        data = os.listdir(self.data_dir)
+        data = sorted(os.listdir(self.data_dir))
 
         img_list, label_list = [], []
         for f in sorted(data):
@@ -28,31 +28,34 @@ class Dataset(torch.utils.data.Dataset):
         self.label_list = label_list
 
     def __len__(self):
-        return len(self.label_list)
+        return len(self.img_list)
 
     def __getitem__(self, index):
-        input = Image.open(os.path.join(self.data_dir, self.img_list[index]))
-        label = Image.open(os.path.join(self.data_dir, self.label_list[index])).convert("L")
-        
-        input, label = np.array(input), np.array(label)
 
-        # input = cv2.imread(os.path.join(self.data_dir, self.img_list[index]))
-        # label = cv2.imread(os.path.join(self.data_dir, self.label_list[index]), cv2.IMREAD_GRAYSCALE)
+        if len(self.img_list) == len(self.label_list):
 
-        input, label = input/255.0, label/255.0
-        input, label = input.astype(np.float32), label.astype(np.float32)
+            input = Image.open(os.path.join(self.data_dir, self.img_list[index]))
+            label = Image.open(os.path.join(self.data_dir, self.label_list[index])).convert("L")
+            
+            input, label = np.array(input), np.array(label)
 
-        if label.ndim == 2:
-            label = label[:, :, np.newaxis]
-        if input.ndim == 2:
-            input = input[:, :, np.newaxis]
+            # input = cv2.imread(os.path.join(self.data_dir, self.img_list[index]))
+            # label = cv2.imread(os.path.join(self.data_dir, self.label_list[index]), cv2.IMREAD_GRAYSCALE)
 
-        data = {'input': input, 'label': label}
+            input, label = input/255.0, label/255.0
+            input, label = input.astype(np.float32), label.astype(np.float32)
 
-        if self.transform:
-            data = self.transform(data)
+            if label.ndim == 2:
+                label = label[:, :, np.newaxis]
+            if input.ndim == 2:
+                input = input[:, :, np.newaxis]
 
-        return data
+            data = {'input': input, 'label': label}
+
+            if self.transform:
+                data = self.transform(data)
+
+            return data
 
 # preprocssing could be in transforms.Compose
 
