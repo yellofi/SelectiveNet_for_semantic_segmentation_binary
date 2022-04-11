@@ -135,11 +135,8 @@ if __name__ == '__main__':
     # log_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/log'
 
     data_dir = f'/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset/{args.fold}-fold'
-    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/{args.fold}-fold/checkpoint'
-    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/{args.fold}-fold/log'
-    
-    # try: os.makedirs(ckpt_dir); os.makedirs(log_dir)
-    # except: pass
+    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/02_5-f_cv_non_tissue_aug/{args.fold}-fold/checkpoint'
+    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/02_5-f_cv_non_tissue_aug/{args.fold}-fold/log'
 
     lr = args.lr
     batch_size = args.batch_size
