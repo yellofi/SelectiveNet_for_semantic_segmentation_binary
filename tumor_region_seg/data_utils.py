@@ -19,9 +19,9 @@ class Dataset(torch.utils.data.Dataset):
 
         img_list, label_list = [], []
         for f in sorted(data):
-            if 'sample' in f:
+            if 'sample' in f and 'S-LC' not in f:
                 img_list.append(f) 
-            elif 'label' in f:
+            elif 'label' in f and 'S-LC' not in f:
                 label_list.append(f)
 
         self.img_list = img_list
@@ -59,17 +59,6 @@ class Dataset(torch.utils.data.Dataset):
 
 # preprocssing could be in transforms.Compose
 
-class ToTensor(object):
-    def __call__(self, data):
-        label, input = data['label'], data['input']
-
-        label = label.transpose((2, 0, 1)).astype(np.float32)
-        input = input.transpose((2, 0, 1)).astype(np.float32)
-
-        data = {'label': torch.from_numpy(label), 'input': torch.from_numpy(input)}
-
-        return data
-
 class Normalization(object):
     def __init__(self, mean=0.5, std=0.5):
         self.mean = mean
@@ -88,10 +77,12 @@ class RandomFlip(object):
     def __call__(self, data):
         label, input = data['label'], data['input']
 
+        # 50% 확률로 좌우반전
         if np.random.rand() > 0.5:
             label = np.fliplr(label)
             input = np.fliplr(input)
 
+        # 50% 확률로 상하반전
         if np.random.rand() > 0.5:
             label = np.flipud(label)
             input = np.flipud(input)
@@ -100,11 +91,53 @@ class RandomFlip(object):
 
         return data
 
+class PartialNonTissue(object):
+    def __call__(self, data):
+        label, input = data['label'], data['input']
+
+        size, size, ch = input.shape
+        half_size = size//2 
+
+        non_tissue = np.clip((0.96*np.ones((half_size, half_size, ch)) + \
+                             0.005*np.random.randn(half_size, half_size, ch)), 
+                             a_min = 0, a_max = 1)
+        non_tissue_mask = np.zeros((half_size, half_size, 1))
+
+        if np.random.randint(1, 5) == 1:
+            rotation = np.random.randint(1, 5) 
+            if rotation == 1:
+                input[:half_size, :half_size, :] = non_tissue
+                label[:half_size, :half_size, :] = non_tissue_mask
+            elif rotation == 2:
+                input[:half_size, half_size:, :] = non_tissue
+                label[:half_size, half_size:, :] = non_tissue_mask
+            elif rotation == 3:
+                input[half_size:, :half_size, :] = non_tissue
+                label[half_size:, :half_size, :] = non_tissue_mask
+            elif rotation == 4:
+                input[:half_size, :half_size, :] = non_tissue
+                label[:half_size, :half_size, :] = non_tissue_mask
+
+        data = {'label': label, 'input': input}
+
+        return data
+
+class ToTensor(object):
+    def __call__(self, data):
+        label, input = data['label'], data['input']
+
+        label = label.transpose((2, 0, 1)).astype(np.float32)
+        input = input.transpose((2, 0, 1)).astype(np.float32)
+
+        data = {'label': torch.from_numpy(label), 'input': torch.from_numpy(input)}
+
+        return data
+
 # get dataloaders
 
 def create_data_loader(data_dir: str, batch_size: int) -> Tuple[DataLoader, DataLoader]: 
 
-    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
+    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
 
     dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train)
     loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
