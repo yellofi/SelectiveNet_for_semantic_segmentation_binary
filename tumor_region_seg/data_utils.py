@@ -19,8 +19,10 @@ class Dataset(torch.utils.data.Dataset):
 
         img_list, label_list = [], []
         for f in sorted(data):
+            # if 'sample' in f:
             if 'sample' in f and 'S-LC' not in f:
-                img_list.append(f) 
+                img_list.append(f)
+            # elif 'label' in f: 
             elif 'label' in f and 'S-LC' not in f:
                 label_list.append(f)
 
@@ -138,6 +140,7 @@ class ToTensor(object):
 def create_data_loader(data_dir: str, batch_size: int) -> Tuple[DataLoader, DataLoader]: 
 
     transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
+    # transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
 
     dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train)
     loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
