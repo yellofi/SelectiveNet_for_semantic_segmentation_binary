@@ -177,107 +177,115 @@ def generate_patch(args, slide_file, target_mag = 200):
     # slide_name, _organ, mpp, slide_dir, _, _, _, _, _ = line
     slide_path = args.data_dir + '/' + slide_file
     slide_name = os.path.basename(slide_path)[:-4]
+
+    _save_dir = os.path.join(args.save_dir, 'patch', slide_name)
+
+    try: os.makedirs(os.path.join(_save_dir))
+    except: print(f"{os.path.join(_save_dir)} already exists")
+
+    
     slide = openslide.OpenSlide(slide_path)
     width, height = slide.dimensions
     slide_mag, mpp = int(args.wsl_mag), float(args.mpp)
 
     tissue_mask, mask_slide_ratio = make_tissue_mask(slide)
 
-    if target_mag == 400:
-        tissue_th = 0.3
-    elif target_mag == 200:
-        tissue_th = 0.1
-    else:
-        tissue_th = args.tissue_th
+    cv2.imwrite(args.save_dir + '/slide' + f'/{slide_name}_{target_mag}x_tissue_mask.jpg', tissue_mask)
+
+
+    # if target_mag == 400:
+    #     tissue_th = 0.3
+    # elif target_mag == 200:
+    #     tissue_th = 0.1
+    # else:
+    #     tissue_th = args.tissue_th
     
-    _save_dir = os.path.join(args.save_dir, 'patch', slide_name)
-
-    try: os.makedirs(os.path.join(_save_dir))
-    except: print(f"{os.path.join(_save_dir)} already exists")
     
-    try: os.mkdir(os.path.join(_save_dir, f'x{target_mag}'))
-    except: print(f"{os.path.join(_save_dir, f'x{target_mag}')} already exists")
-
-    sliding_window = 1
-    patch_size = args.patch_size
-    mpp_ratio = slide_mag//target_mag
-
-    total_point = []
-    for i in range(sliding_window * width//(patch_size*mpp_ratio)):
-        for j in range(sliding_window * height//(patch_size*mpp_ratio)):
-            total_point.append((i, j))
     
-    # shuffle(total_point)
-    num_total_patch = len(total_point)
-    print(f"{slide_name} | x{target_mag} | # of patch: {num_total_patch}")
+    # try: os.mkdir(os.path.join(_save_dir, f'x{target_mag}'))
+    # except: print(f"{os.path.join(_save_dir, f'x{target_mag}')} already exists")
 
-    n_process = 12
-    queue_size = 15 * n_process
-    queue = Manager().Queue(queue_size)
-    queue2 = Manager().Queue(num_total_patch)
+    # sliding_window = 1
+    # patch_size = args.patch_size
+    # mpp_ratio = slide_mag//target_mag
+
+    # total_point = []
+    # for i in range(sliding_window * width//(patch_size*mpp_ratio)):
+    #     for j in range(sliding_window * height//(patch_size*mpp_ratio)):
+    #         total_point.append((i, j))
     
-    pool = Pool(n_process)
-    split_points = []
-    for ii in range(n_process):
-        split_points.append(total_point[ii::n_process])
+    # # shuffle(total_point)
+    # num_total_patch = len(total_point)
+    # print(f"{slide_name} | {target_mag}x | # of patch: {num_total_patch}")
 
-    result = pool.map_async(read_regions_semi, [(queue, queue2, allocated_points, patch_size, sliding_window, slide_path,
-                                                 tissue_mask, tissue_th, mask_slide_ratio, mpp_ratio)
-                                                for allocated_points in split_points])
+    # n_process = 12
+    # queue_size = 15 * n_process
+    # queue = Manager().Queue(queue_size)
+    # queue2 = Manager().Queue(num_total_patch)
+    
+    # pool = Pool(n_process)
+    # split_points = []
+    # for ii in range(n_process):
+    #     split_points.append(total_point[ii::n_process])
 
-    slide_thumbnail = slide.get_thumbnail((tissue_mask.shape[1], tissue_mask.shape[0])) 
-    slide_thumbnail = slide_thumbnail.convert('RGB')
-    slide_ = np.array(slide_thumbnail, dtype=np.uint8)
+    # result = pool.map_async(read_regions_semi, [(queue, queue2, allocated_points, patch_size, sliding_window, slide_path,
+    #                                              tissue_mask, tissue_th, mask_slide_ratio, mpp_ratio)
+    #                                             for allocated_points in split_points])
 
-    mask_step_size = (mpp_ratio*(patch_size//sliding_window))//mask_slide_ratio
+    # slide_thumbnail = slide.get_thumbnail((tissue_mask.shape[1], tissue_mask.shape[0])) 
+    # slide_thumbnail = slide_thumbnail.convert('RGB')
+    # slide_ = np.array(slide_thumbnail, dtype=np.uint8)
 
-    batch_size = 64
-    blur_th = args.blur_th 
-    img_list, point_list, patch_list = [], [], []
+    # mask_step_size = (mpp_ratio*(patch_size//sliding_window))//mask_slide_ratio
 
-    count = 0
-    while True:
-        if queue.empty():
-            if not result.ready():
-                time.sleep(0.5)
-            elif result.ready() and len(patch_list) == 0:
-                break
-        else:
-            img, patch_, x, y = queue.get()
-            patch_list.append(patch_)
-            point_list.append((x, y))
-            img_list.append(img)
+    # batch_size = 64
+    # blur_th = args.blur_th 
+    # img_list, point_list, patch_list = [], [], []
+
+    # count = 0
+    # while True:
+    #     if queue.empty():
+    #         if not result.ready():
+    #             time.sleep(0.5)
+    #         elif result.ready() and len(patch_list) == 0:
+    #             break
+    #     else:
+    #         img, patch_, x, y = queue.get()
+    #         patch_list.append(patch_)
+    #         point_list.append((x, y))
+    #         img_list.append(img)
             
-            if len(patch_list) == batch_size or \
-            (result.ready() and queue.empty() and len(patch_list) > 0):
+    #         if len(patch_list) == batch_size or \
+    #         (result.ready() and queue.empty() and len(patch_list) > 0):
 
-                with torch.autograd.no_grad():
-                    batch = torch.FloatTensor(np.stack(patch_list)).cuda()
-                    output = model(batch)
-                output = output.cpu().data.numpy()
-                output = np.var(output, axis=(1, 2, 3))
-                for ii in range(len(patch_list)):
-                    _x, _y = point_list[ii]
-                    img = img_list[ii]
-                    if output[ii] > blur_th:
-                        # img.convert('RGB').save(os.path.join(_save_dir, 'x{}'.format(target_mag), slide_name + '_' + str(_x)+'_'+str(_y)+'.jpg'))
-                        slide_ = cv2.rectangle(slide_, (_x//mask_slide_ratio, _y//mask_slide_ratio), 
-                        (_x//mask_slide_ratio+mask_step_size, _y//mask_slide_ratio+mask_step_size), color=(0, 255, 0), thickness=2)
-                        count += 1
+    #             with torch.autograd.no_grad():
+    #                 batch = torch.FloatTensor(np.stack(patch_list)).cuda()
+    #                 output = model(batch)
+    #             output = output.cpu().data.numpy()
+    #             output = np.var(output, axis=(1, 2, 3))
+    #             for ii in range(len(patch_list)):
+    #                 _x, _y = point_list[ii]
+    #                 img = img_list[ii]
+    #                 if output[ii] > blur_th:
+    #                     # img.convert('RGB').save(os.path.join(_save_dir, 'x{}'.format(target_mag), slide_name + '_' + str(_x)+'_'+str(_y)+'.jpg'))
+    #                     slide_ = cv2.rectangle(slide_, (_x//mask_slide_ratio, _y//mask_slide_ratio), 
+    #                     (_x//mask_slide_ratio+mask_step_size, _y//mask_slide_ratio+mask_step_size), color=(0, 255, 0), thickness=2)
+    #                     count += 1
 
-                img_list, point_list, patch_list = [], [], []
-    if not result.successful():
-        print('Something wrong in result')
-    cv2.imwrite(args.save_dir + '/patch' + f'/{slide_name}_x{target_mag}_tissue_th-{tissue_th}_blur_th-{blur_th}_num-{count}.jpg', cv2.cvtColor(slide_, cv2.COLOR_BGR2RGB))
-    print(f'# of actual saved patch_: {count}')
-    pool.close()
-    pool.join()
+    #             img_list, point_list, patch_list = [], [], []
+    # if not result.successful():
+    #     print('Something wrong in result')
+    # cv2.imwrite(args.save_dir + '/patch' + f'/{slide_name}_{target_mag}x_tissue_th-{tissue_th}_blur_th-{blur_th}_num-{count}.jpg', cv2.cvtColor(slide_, cv2.COLOR_BGR2RGB))
+    # print(f'# of actual saved patch_: {count}')
+    # pool.close()
+    # pool.join()
     
 if __name__ == "__main__":
 
     args = parse_arguments()
+    issues = [7, 17, 25, 33, 39, 42, 43, 48, 53, 55, 69, 87, 89, 91, 92, 98, 102, 104, 112]
+    slide_list = sorted([i for i in os.listdir(args.data_dir) if 'svs' in i and int(i.split('-')[1][2:]) in issues])
 
-    slide_list = sorted([i for i in os.listdir(args.data_dir) if 'svs' in i])
     total_time = 0
     for i, slide_file in enumerate(slide_list):
         for target_mag in args.patch_mag:
