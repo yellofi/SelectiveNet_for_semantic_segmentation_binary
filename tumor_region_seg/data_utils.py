@@ -1,11 +1,43 @@
 import os
-# import cv2
+import cv2
 from PIL import Image
 import numpy as np
 import torch
 from typing import Tuple
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms
+
+
+"""
+Blankfield Correction
+"""
+# 영상내 밝기가 높은 값을 찾고, 그 영역의 밝기 평균을 구함
+def estimate_blankfield_white(image, ratio=0.01):
+    rgb = image.copy()
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+    for i in range(1, 256):
+        hist[i][0] += hist[i - 1][0]
+    N = hist[-1][0]
+    k = round(N * ratio / 2)
+    threshold = 255
+    while hist[threshold][0] > N - k:
+        threshold -= 1
+    mask = (gray >= threshold).astype(np.uint8)
+    white = np.array(cv2.mean(rgb, mask=mask)[:3], dtype=np.uint8)
+    return white
+
+# 영상내 밝기 높은 영역의 평균이 255가 되도록, 0~255로 변경
+def correct_background(image, white=None, ratio=0.01, target=255):
+    if white is None:
+        white = estimate_blankfield_white(image, ratio=ratio)
+    rgb = image.copy()
+    divider = np.zeros_like(rgb)
+    for ch in range(0, 3):
+        divider[:, :, ch] = white[ch]  
+    cv2.divide(rgb, divider, rgb, scale=target)
+    return rgb
+
 
 # define custom torch dataset for torch dataloader
 
@@ -19,11 +51,11 @@ class Dataset(torch.utils.data.Dataset):
 
         img_list, label_list = [], []
         for f in sorted(data):
-            # if 'sample' in f:
-            if 'sample' in f and 'S-LC' not in f:
+            if 'sample' in f:
+            # if 'sample' in f and 'S-LC' not in f:
                 img_list.append(f)
-            # elif 'label' in f: 
-            elif 'label' in f and 'S-LC' not in f:
+            elif 'label' in f: 
+            # elif 'label' in f and 'S-LC' not in f:
                 label_list.append(f)
 
         self.img_list = img_list
@@ -40,9 +72,9 @@ class Dataset(torch.utils.data.Dataset):
             label = Image.open(os.path.join(self.data_dir, self.label_list[index])).convert("L")
             
             input, label = np.array(input), np.array(label)
-
-            # input = cv2.imread(os.path.join(self.data_dir, self.img_list[index]))
-            # label = cv2.imread(os.path.join(self.data_dir, self.label_list[index]), cv2.IMREAD_GRAYSCALE)
+            
+            # Blankfield Correction, 밝은 영역 평균을 구해 그걸로 255로 맞추고 scale 다시 맞추는 작업
+            input = correct_background(input)
 
             input, label = input/255.0, label/255.0
             input, label = input.astype(np.float32), label.astype(np.float32)
@@ -139,8 +171,8 @@ class ToTensor(object):
 
 def create_data_loader(data_dir: str, batch_size: int) -> Tuple[DataLoader, DataLoader]: 
 
-    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
-    # transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
+    # transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
+    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
 
     dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train)
     loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
