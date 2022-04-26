@@ -135,8 +135,8 @@ if __name__ == '__main__':
     # log_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/log'
 
     data_dir = f'/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset/{args.fold}-fold'
-    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/03_5-f_cv_PNT/{args.fold}-fold/checkpoint'
-    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/03_5-f_cv_PNT/{args.fold}-fold/log'
+    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/04_5-f_cv_BC/{args.fold}-fold/checkpoint'
+    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/04_5-f_cv_BC/{args.fold}-fold/log'
 
     lr = args.lr
     batch_size = args.batch_size
