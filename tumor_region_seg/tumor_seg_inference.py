@@ -6,6 +6,8 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from model import UNet
+from data_utils import correct_background
+import time
 
 class Dataset(torch.utils.data.Dataset):
 
@@ -24,6 +26,9 @@ class Dataset(torch.utils.data.Dataset):
 
         input = Image.open(os.path.join(self.data_dir, self.img_list[index]))
         input = np.array(input)
+
+        # Blankfield Correction, 밝은 영역 평균을 구해 그걸로 255로 맞추고 scale 다시 맞추는 작업
+        # input = correct_background(input)
 
         input = input/255.0
         input = input.astype(np.float32)
@@ -62,7 +67,6 @@ class Normalization(object):
 
         return data
 
-
 def net_test_load(ckpt_dir, net, epoch = 0, device = torch.device('cuda:0')):
     if not os.path.exists(ckpt_dir): # 저장된 네트워크가 없다면 인풋을 그대로 반환
         epoch = 0
@@ -81,14 +85,8 @@ def net_test_load(ckpt_dir, net, epoch = 0, device = torch.device('cuda:0')):
 
 if __name__ == '__main__':
 
-    data_dir = '/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch/S-LC0001-MET/x200'
-    batch_size = 1
-
-    print('Load Data...')
-    transform = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
-    dataset = Dataset(data_dir=data_dir, transform = transform)
-    loader = DataLoader(dataset, batch_size = batch_size, shuffle=False)
-
+    print('Load Models...')
+    
     rank = 7
     torch.cuda.set_device(rank)
     device = torch.device(f'cuda:{rank}')
@@ -96,62 +94,86 @@ if __name__ == '__main__':
     k_fold = 5
     nets = []
 
-    print('Load Model...')
+    model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/01_5-f_cv_baseline'
+    # model_select = [99, 99, 89, 87, 98]
+    model_select = [207, 208, 263, 290, 285]
     for i in range(k_fold):
         print(f'{i+1}-fold - ', end = '')
-        ckpt_dir = f'./model/{i+1}-fold/'
+        # ckpt_dir = f'./model/{i+1}-fold/'
+        # ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/04_5-f_cv_BC/{i+1}-fold/checkpoint'
+        ckpt_dir = f'{model_dir}/{i+1}-fold/checkpoint'
 
         net = UNet().to(device)
-        net = net_test_load(ckpt_dir = ckpt_dir, net = net, device=device)
+        net = net_test_load(ckpt_dir = ckpt_dir, net = net, epoch = model_select[i], device=device)
 
         nets.append(net)
+
+    patch_dir = '/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch_on_ROI'
+    slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f))])
+
+    batch_size = 1
 
     fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
     fn_denorm = lambda x, mean, std : (x*std) + mean
     fn_norm = lambda x : (x-x.min())/(x.max()-x.min())
     fn_classifier = lambda x : 1.0 * (x > 0.5)
-
-    print('Model Inference...')
-    results = []
-    with torch.no_grad(): 
-        net.eval() 
-        
-        for batch, data in enumerate(loader, 1):
-            # forward
-            input = data['input'].to(device)
-            img_id = data['id']
-            
-            outputs = []
-            for net in nets:
-                output = net(input)
-                outputs.append(np.squeeze(fn_tonumpy(fn_norm(output)), axis=-1))
-
-            input = fn_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
-            output_avg = np.mean(np.asarray(outputs), axis = 0)
-            final_pred = fn_classifier(output_avg)
-
-            results.append((img_id, input, final_pred, output_avg))
     
-    mask_save_dir = './output'
-    plot_save_dir = './output/plot'
+    print('Inference...')
 
-    try: os.makedirs(mask_save_dir); os.makedirs(plot_save_dir)
-    except: pass
+    total_time = 0
+    for slide_id in slide_list:
+        
+        start_time = time.time()
+        data_dir = os.path.join(patch_dir, slide_id, 'x200')
+        mask_save_dir = f'{model_dir}/output/NT_add/{slide_id}'
+        plot_save_dir = mask_save_dir + '/plot'
 
-    print('Plot and Save...')
-    for (img_id, img, pred, output) in results:
-        for i in range(batch_size):
-            plt.figure(figsize = (20, 10))
-            plt.subplot(1, 3, 1)
-            plt.imshow(img[i])
-            plt.subplot(1, 3, 2)
-            plt.imshow(img[i])
-            plt.imshow(output[i], cmap ='jet', alpha = 0.3)
-            plt.subplot(1, 3, 3)
-            plt.imshow(img[i])
-            plt.imshow(pred[i], alpha = 0.3)
-            plt.savefig(f'{plot_save_dir}/{img_id[i]}_prediction_overlay.jpg', bbox_inches = 'tight')
-            plt.close()
+        try: os.makedirs(mask_save_dir); os.makedirs(plot_save_dir)
+        except: pass
+        
+        transform = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
+        dataset = Dataset(data_dir=data_dir, transform = transform)
+        loader = DataLoader(dataset, batch_size = batch_size, shuffle=False)
 
-            pred_ = Image.fromarray(np.uint8(pred[i]*255))
-            pred_.save(f'{mask_save_dir}/{img_id[i]}_predicted_tumor_region.jpg')
+        results = []
+        with torch.no_grad(): 
+            net.eval() 
+            
+            for batch, data in enumerate(loader, 1):
+                # forward
+                input = data['input'].to(device)
+                img_id = data['id']
+                
+                outputs = []
+                for net in nets:
+                    output = net(input)
+                    outputs.append(np.squeeze(fn_tonumpy(fn_norm(output)), axis=-1))
+
+                input = fn_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
+                output_avg = np.mean(np.asarray(outputs), axis = 0)
+                final_pred = fn_classifier(output_avg)
+
+                results.append((img_id, input, final_pred, output_avg))
+
+        for (img_id, img, pred, output) in results:
+            for i in range(batch_size):
+                plt.figure(figsize = (20, 10))
+                plt.subplot(1, 3, 1)
+                plt.imshow(img[i])
+                plt.subplot(1, 3, 2)
+                plt.imshow(img[i])
+                plt.imshow(output[i], cmap ='jet', alpha = 0.3)
+                plt.subplot(1, 3, 3)
+                plt.imshow(img[i])
+                plt.imshow(pred[i], alpha = 0.3)
+                plt.savefig(f'{plot_save_dir}/{img_id[i]}_prediction_overlay.jpg', bbox_inches = 'tight')
+                plt.close()
+
+                pred_ = Image.fromarray(np.uint8(pred[i]*255))
+                pred_.save(f'{mask_save_dir}/{img_id[i]}_predicted_tumor_region.png')
+
+        taken = time.time() - start_time
+        print(f'{slide_id} | #: {len(os.listdir(data_dir))} | time: {round(taken, 2)} sec')
+        total_time += taken 
+
+    print(f'total time: {round(total_time, 2)} sec')
