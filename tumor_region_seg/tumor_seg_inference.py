@@ -166,11 +166,11 @@ if __name__ == '__main__':
                 plt.subplot(1, 3, 3)
                 plt.imshow(img[i])
                 plt.imshow(pred[i], alpha = 0.3)
-                plt.savefig(f'{plot_save_dir}/{img_id[i]}_prediction_overlay.jpg', bbox_inches = 'tight')
+                plt.savefig(f'{plot_save_dir}/{img_id[i][:-4]}_prediction_overlay.jpg', bbox_inches = 'tight')
                 plt.close()
 
                 pred_ = Image.fromarray(np.uint8(pred[i]*255))
-                pred_.save(f'{mask_save_dir}/{img_id[i]}_predicted_tumor_region.png')
+                pred_.save(f'{mask_save_dir}/{img_id[i][:-4]}_predicted_tumor_region.png')
 
         taken = time.time() - start_time
         print(f'{slide_id} | #: {len(os.listdir(data_dir))} | time: {round(taken, 2)} sec')
