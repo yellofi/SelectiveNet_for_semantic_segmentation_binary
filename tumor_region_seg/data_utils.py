@@ -1,6 +1,7 @@
 import os
 import cv2
 from PIL import Image
+import skimage.color
 import numpy as np
 import torch
 from typing import Tuple
@@ -38,14 +39,34 @@ def correct_background(image, white=None, ratio=0.01, target=255):
     cv2.divide(rgb, divider, rgb, scale=target)
     return rgb
 
+"""
+input as Gray + Hematoxylin
+"""
+def RGB2GH(image):
+    """
+    Arg:
+        image = RGB image with 3 channels [r, g, b], 0 ~ 1 of scale, dtype = np.float32
+
+    Return:
+        gh = GH image with 2 channels [g, h], 0 ~ 1 of scale, dtype = np.float32
+    """
+    g = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) 
+    h = skimage.color.separate_stains(image, skimage.color.hed_from_rgb)[:, :, 0]
+    h_min,  h_max = -0.66781543,  1.87798274 
+    h = (h - h_min)/(h_max-h_min)
+    # h = (h- h.min())/(h.max()-h.min()).astype('float32')
+    gh = np.concatenate((g[:, :, np.newaxis], h[:, :, np.newaxis]), axis = -1)
+    return gh.astype('float32')
+        
 
 # define custom torch dataset for torch dataloader
 
 class Dataset(torch.utils.data.Dataset):
 
-    def __init__(self, data_dir, transform=None):
+    def __init__(self, data_dir, transform=None, input_type='RGB'):
         self.data_dir = data_dir
         self.transform = transform
+        self.input_type = input_type
 
         data = sorted(os.listdir(self.data_dir))
 
@@ -74,10 +95,13 @@ class Dataset(torch.utils.data.Dataset):
             input, label = np.array(input), np.array(label)
             
             # Blankfield Correction, 밝은 영역 평균을 구해 그걸로 255로 맞추고 scale 다시 맞추는 작업
-            input = correct_background(input)
+            # input = correct_background(input)
 
             input, label = input/255.0, label/255.0
             input, label = input.astype(np.float32), label.astype(np.float32)
+
+            if self.input_type == 'GH':
+                input = RGB2GH(input)
 
             if label.ndim == 2:
                 label = label[:, :, np.newaxis]
@@ -103,7 +127,9 @@ class Normalization(object):
 
         input = (input - self.mean) / self.std
 
-        data = {'label': label, 'input': input}
+        data['input'] = input
+        data['label'] = label
+        # data = {'label': label, 'input': input}
 
         return data
 
@@ -121,7 +147,9 @@ class RandomFlip(object):
             label = np.flipud(label)
             input = np.flipud(input)
 
-        data = {'label': label, 'input': input}
+        data['input'] = input
+        data['label'] = label
+        # data = {'label': label, 'input': input}
 
         return data
 
@@ -152,7 +180,10 @@ class PartialNonTissue(object):
                 input[:half_size, :half_size, :] = non_tissue
                 label[:half_size, :half_size, :] = non_tissue_mask
 
-        data = {'label': label, 'input': input}
+        data['input'] = input
+        data['label'] = label
+
+        # data = {'label': label, 'input': input}
 
         return data
 
@@ -163,26 +194,11 @@ class ToTensor(object):
         label = label.transpose((2, 0, 1)).astype(np.float32)
         input = input.transpose((2, 0, 1)).astype(np.float32)
 
-        data = {'label': torch.from_numpy(label), 'input': torch.from_numpy(input)}
+        data['input'] = torch.from_numpy(input)
+        data['label'] = torch.from_numpy(label)
+        # data = {'label': torch.from_numpy(label), 'input': torch.from_numpy(input)}
 
         return data
-
-# get dataloaders
-
-def create_data_loader(data_dir: str, batch_size: int) -> Tuple[DataLoader, DataLoader]: 
-
-    # transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
-    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
-
-    dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train)
-    loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
-
-    transform_val = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
-
-    dataset_val = Dataset(data_dir=os.path.join(data_dir, 'valid'), transform = transform_val)
-    loader_val = DataLoader(dataset_val, batch_size = batch_size, shuffle=True)
-
-    return loader_train, loader_val
 
 
 # get dataloaders which have their own sampler

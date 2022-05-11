@@ -38,7 +38,7 @@ Networks
 """
 
 class UNet(nn.Module):
-    def __init__(self):
+    def __init__(self, input_ch = 3):
         super(UNet, self).__init__()
 
         def CBR_2D(in_ch, out_ch, k_size = 3, stride = 1, padding = 1, bias = True):
@@ -51,7 +51,7 @@ class UNet(nn.Module):
 
             return conv_block
 
-        self.encoder_layer_1_1 = CBR_2D(in_ch=3, out_ch=64) 
+        self.encoder_layer_1_1 = CBR_2D(in_ch=input_ch, out_ch=64) 
         self.encoder_layer_1_2 = CBR_2D(in_ch=64, out_ch=64)
         self.pool1 = nn.MaxPool2d(kernel_size=2)
 

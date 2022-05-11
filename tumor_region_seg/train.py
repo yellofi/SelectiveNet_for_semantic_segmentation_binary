@@ -18,6 +18,7 @@ def parse_arguments():
     parser.add_argument('--local_rank', type=int, default=0, help='local rank')
     parser.add_argument('--fold', type = int, default = 1, help = 'which fold in 5-fold cv')
     
+    parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--n_epoch', type=int, default=100)
@@ -29,12 +30,32 @@ def parse_arguments():
 
     return args
 
-def train(rank, data_loader, lr, num_epoch):
+def create_data_loader(data_dir: str, batch_size: int, input_type: str) -> Tuple[DataLoader, DataLoader]: 
+
+    # transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
+    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
+
+    dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train, input_type = input_type)
+    loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
+
+    transform_val = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
+
+    dataset_val = Dataset(data_dir=os.path.join(data_dir, 'valid'), transform = transform_val, input_type = input_type)
+    loader_val = DataLoader(dataset_val, batch_size = batch_size, shuffle=True)
+
+    return loader_train, loader_val
+
+def train(rank, data_loader, lr, num_epoch, input_type):
 
     loader_train, loader_val = data_loader
 
     device = torch.device(f'cuda:{rank}')
-    net = UNet().to(device)
+
+    if input_type == 'RGB':
+        net = UNet(input_ch = 3).to(device)
+    elif input_type == 'GH':
+        net = UNet(input_ch = 2).to(device)
+
     # net = DDP(net, device_ids=[rank], output_device=rank)
 
     optim = torch.optim.Adam(net.parameters(), lr = lr)
@@ -59,6 +80,7 @@ def train(rank, data_loader, lr, num_epoch):
             # inputs = data['input'].to(device, non_blocking=True)
             label = data['label'].to(device)
             inputs = data['input'].to(device)
+            
             output = net(inputs) 
 
             # backward
@@ -76,7 +98,7 @@ def train(rank, data_loader, lr, num_epoch):
             output = fn_tonumpy(fn_classifier(output))
 
             writer_train.add_image('label', label, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
-            writer_train.add_image('input', inputs, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
+            # writer_train.add_image('input', inputs, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
             writer_train.add_image('output', output, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
 
         writer_train.add_scalar('loss', np.mean(tr_loss_arr), epoch)
@@ -105,7 +127,7 @@ def train(rank, data_loader, lr, num_epoch):
                 output = fn_tonumpy(fn_classifier(output))
 
                 writer_val.add_image('label', label, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
-                writer_val.add_image('input', inputs, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
+                # writer_val.add_image('input', inputs, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
                 writer_val.add_image('output', output, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
 
             writer_val.add_scalar('loss', np.mean(val_loss_arr), epoch)
@@ -122,25 +144,23 @@ def main(rank, world_size):
 
     print(f'# of gpu: {world_size}, gpu id: {rank}\n')
 
-    data_loader = create_data_loader(data_dir=data_dir, batch_size=batch_size)
-    train(rank=rank, data_loader=data_loader, lr=lr, num_epoch=num_epoch)
+    data_loader = create_data_loader(data_dir, batch_size, input_type)
+    train(rank, data_loader, lr, num_epoch, input_type)
 
 
 if __name__ == '__main__':
 
     args = parse_arguments()
-    
-    # data_dir = '/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset'
-    # ckpt_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/checkpoint'
-    # log_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/log'
 
     data_dir = f'/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset/{args.fold}-fold'
-    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/04_5-f_cv_BC/{args.fold}-fold/checkpoint'
-    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/04_5-f_cv_BC/{args.fold}-fold/log'
+    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/05_5-f_cv_GH/{args.fold}-fold/checkpoint'
+    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/05_5-f_cv_GH/{args.fold}-fold/log'
 
+    input_type = args.input_type
     lr = args.lr
     batch_size = args.batch_size
     num_epoch = args.n_epoch
+    
 
     rank = args.local_rank
     world_size = torch.cuda.device_count() #8
