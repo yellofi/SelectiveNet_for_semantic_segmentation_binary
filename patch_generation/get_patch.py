@@ -25,11 +25,6 @@ def parse_arguments():
     parser.add_argument('--tissue_mask_type', action="store", type=str,
                         default='sobel', help="otsu, sobel, ...")
 
-    parser.add_argument('--mpp', action="store", type=int,
-                        default=0.2532, help='millimeter per pixel')
-    parser.add_argument('--wsl_mag', action="store", type=int,
-                        default=400, help='the magnification of WSI images')
-
     parser.add_argument('--patch_mag', action="store", nargs='+', type=int,
                         default=[200], help='target magnifications of generated patches')
     parser.add_argument('--patch_size', action="store", type=int,
@@ -98,7 +93,12 @@ def generate_patch(args, slide_file, ROI_file, target_mag = 200):
     slide = openslide.OpenSlide(slide_path)
     ROI = parse(ROI_path).getroot()
     width, height = slide.dimensions
-    slide_mag, mpp = int(args.wsl_mag), float(args.mpp)
+
+    slide_mag = float(slide.properties['openslide.objective-power']) 
+    slide_mag = int(slide_mag*10)
+
+    try: mpp =  float(slide.properties['openslide.mpp-x']) #svs, ndpi, mrxs, tif(Roche)
+    except: mpp = 10000 / float(slide.properties['tiff.XResolution']) # tif
 
     ROI_mask = get_ROI_mask(slide, ROI)
 
@@ -109,6 +109,9 @@ def generate_patch(args, slide_file, ROI_file, target_mag = 200):
 
     cv2.imwrite(args.save_dir + f'/{slide_name}_tissue_mask.jpg', tissue_mask)
 
+    if target_mag > slide_mag:
+        print(f'You can extract patches at lower magnification (slide magnification: {slide_mag}')
+    
     if target_mag == 400:
         tissue_th = 0.3
     elif target_mag == 200:
@@ -130,7 +133,7 @@ def generate_patch(args, slide_file, ROI_file, target_mag = 200):
     
     # shuffle(total_point)
     num_total_patch = len(total_point)
-    print(f"{slide_name} | {target_mag}x | # of patch: {num_total_patch}")
+    print(f"{slide_name} ({slide_mag}x, mpp: {mpp}) | {target_mag}x | # of patch: {num_total_patch}")
 
     n_process = 12
     queue_size = 15 * n_process
