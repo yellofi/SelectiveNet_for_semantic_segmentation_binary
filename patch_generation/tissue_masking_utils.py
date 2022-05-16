@@ -1,8 +1,8 @@
 import numpy as np
 import cv2
+from xml.etree.ElementTree import parse
 
-
-def get_ROI_mask(slide, xml):
+def get_ROI_mask(slide, xml_path):
     """
     inputs
         slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
@@ -14,6 +14,8 @@ def get_ROI_mask(slide, xml):
     output
         ROI mask (np.array): a gray image (binary mask)
     """
+    
+    xml = parse(xml_path).getroot()
 
     if slide.level_count < 4:
         level_index = slide.level_count-1
@@ -55,97 +57,210 @@ def get_ROI_mask(slide, xml):
 
     return ROI_mask
 
-def make_tissue_mask_otsu(slide, ROI_mask):
-    """
-    Args:
-        slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
-        ROI mask (np.array): ROI (Region of Interest) mask, a binary mask whose size is the same with the lowest resolution (level 3) of slide
 
-    get a tissue mask on ROI, using Otsu's thresholding in HSV channel
 
-    RGB2HSV -> S, V_inv (1 - V) -> S' = Otsu(S), V_inv' = Otsu(V_inv) 
-    -> S" = MorpOp(S'), V_inv" MorpOp(V_inv') ->  tissue mask = OR(S", V_inv")
+"""
+Label maker
+"""
+import multiprocessing as mp
+# pool = mp.Pool(processes=12)
+# pool.map(count, num_list)
+# pool.close()
+# pool.join()
+class Annotation:
+    def __init__(self, slide, level = -1):
 
-    Return:
-        tissue mask (np.array): a gray image (binary mask)
-    """
+        # self.slide_path = slide_path
+        # self.slide = openslide.OpenSlide(slide_path)
 
-    if slide.level_count < 4:
-        level_index = slide.level_count-1
-    else:
-        level_index = 3
+        self.slide = slide
+        self.level = level
 
-    slide_thumbnail = slide.get_thumbnail(slide.level_dimensions[level_index]) 
-    slide_thumbnail = slide_thumbnail.convert('RGB') 
+        # slide_thumbnail = self.slide.get_thumbnail(self.slide.level_dimensions[self.level])
+        # slide_thumbnail = slide_thumbnail.convert('RGB')
+        # self.slide_thumbnail = np.array(slide_thumbnail)
 
-    mask_slide_ratio = round(slide.level_downsamples[level_index])
+    def get_coordinates(self, xml_path, target = 'tumor_region'):
 
-    otsu_image = cv2.cvtColor(np.array(slide_thumbnail), cv2.COLOR_BGR2HSV)
+        xml_path = xml_path
+        xml = parse(xml_path).getroot()
+        
+        slide_mask_ratio = round(self.slide.level_downsamples[self.level])
 
-    otsu_image_1 = otsu_image[:, :, 1]
-    otsu_image_2 = 1 - otsu_image[:, :, 2]
+        annotations = []
+        non_target_annotations = []
+        patterns = []
 
-    # on ROI 
-    otsu_image_1 = cv2.bitwise_and(otsu_image_1, ROI_mask)
-    otsu_image_2 = cv2.bitwise_and(otsu_image_2, ROI_mask)
+        for anno in xml.iter('Annotation'):
+            pattern = anno.get('class')
+            patterns.append(pattern)
+            annotation = []
+            for i, coors in enumerate(anno):
+                if i == 0: 
+                    continue
+                coordinates = []
+                for coor in coors:
+                    # coordinates.append([round(float(coor.get('x'))), round(float(coor.get('y')))])
+                    coordinates.append([round(float(coor.get('x'))//slide_mask_ratio), round(float(coor.get('y'))//slide_mask_ratio)])
+                annotation.append(coordinates)
+            if target == 'tumor_region':
+                if pattern == 'Pattern5':
+                    annotations.append(annotation)
+                if pattern == 'Pattern3':
+                    non_target_annotations.append(annotation)
+            elif target == 'tissue_region':
+                annotations.append(annotation)
 
-    otsu_image_1 = cv2.threshold(otsu_image_1, 0, 255,
-                                     cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    otsu_image_2 = cv2.threshold(otsu_image_2, 0, 255,
-                                     cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        return annotations, non_target_annotations
 
-    kernel = np.ones((11, 11), dtype=np.uint8)
+    # def draw_contours(self, mask, anno, color):
+    #     _anno = []
+    #     for coors in anno:
+    #         _anno.append(np.array(coors))
+    #     cv2.drawContours(mask, _anno, -1, color, -1)
+    
+    def make_mask(self, annotations, color = 255):
 
-    otsu_image_1 = cv2.morphologyEx(otsu_image_1, cv2.MORPH_CLOSE, kernel)
-    otsu_image_1 = cv2.morphologyEx(otsu_image_1, cv2.MORPH_OPEN, kernel)
-    otsu_image_2 = cv2.morphologyEx(otsu_image_2, cv2.MORPH_CLOSE, kernel)
-    otsu_image_2 = cv2.morphologyEx(otsu_image_2, cv2.MORPH_OPEN, kernel)
+        width, height = self.slide.level_dimensions[self.level]
+        mask = np.zeros((height, width)).astype(np.uint8)
+        # mask = np.zeros((height, width, 3)).astype(np.uint8)
+       
+        # pool = mp.Pool(processes=12)
+        # pool.map(self.draw_contours, [(mask, anno, color) for anno in annotations])
+        # # result = pool.map_async(self.draw_contours, [(mask, anno, color) for anno in annotations])
+        # pool.close()
+        # pool.join()
 
-    otsu_image = np.logical_or(otsu_image_1, otsu_image_2).astype(float)*255
+        for anno in annotations:
+            _anno = []
+            for coors in anno:
+                _anno.append(np.array(coors))
+            cv2.drawContours(mask, _anno, -1, color, -1)
 
-    return otsu_image, mask_slide_ratio
+        return mask
 
-def make_tissue_mask_sobel(slide, ROI_mask):
 
-    """
-    Args:
-        slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
-        ROI mask (np.array): ROI (Region of Interest) mask, a binary mask whose size is the same with the lowest resolution (level 3) of slide
 
-    get a tissue mask on ROI, using Edge Detection
+"""
+Tissue Masking
+"""
 
-    RGB2GRAY -> Edge Detection (Sobel) -> Morphological Op. (Closing and Opening) 
+class TissueMask:
+    def __init__(self, slide, level = -1, ROI_mask = None, NOI_mask = None):
+        self.slide = slide
+        self.level = level
+        self.ROI_mask = ROI_mask
+        self.NOI_mask = NOI_mask
 
-    Return:
-        edge mask (np.array): a gray image (binary mask)
-    """
+    def make_tissue_mask_otsu(self, slide, ROI_mask, NOI_mask, level):
+        """
+        Args:
+            slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
+            ROI mask (np.array): ROI (Region of Interest) mask, a binary mask whose size is the same with the lowest resolution (level 3) of slide
 
-    if slide.level_count < 4:
-        level_index = slide.level_count-1
-    else:
-        level_index = 3
+        get a tissue mask on ROI, using Otsu's thresholding in HSV channel
 
-    slide_thumbnail = slide.get_thumbnail(slide.level_dimensions[level_index]) 
-    slide_thumbnail = np.array(slide_thumbnail.convert('L')) 
+        RGB2HSV -> S, V_inv (1 - V) -> S' = Otsu(S), V_inv' = Otsu(V_inv) 
+        -> S" = MorpOp(S'), V_inv" MorpOp(V_inv') ->  tissue mask = OR(S", V_inv")
 
-    mask_slide_ratio = round(slide.level_downsamples[level_index])
+        Return:
+            tissue mask (np.array): a gray image (binary mask)
+        """
 
-    edge_mask = cv2.bitwise_and(slide_thumbnail, ROI_mask)
-    edge_mask = cv2.Sobel(src=edge_mask, ddepth=cv2.CV_64F, dx=1,dy=1, ksize=5)
-    # edge_mask = cv2.convertScaleAbs(edge_mask) # to 0 ~ 255, 큰 상관없음
+        # if slide.level_count < 4:
+        #     level_index = slide.level_count-1
+        # else:
+        #     level_index = 3
 
-    # edge detection이 목적이면 sobel edge detection을 x방향, y방향으로 따로 한 뒤 합쳐주는 게 맞지만,
-    # tissue를 background와 구분하기 위함이라면 앞에 sobel edge detection을 xy방향으로 한 번만 해줘도 크게 문제될 게 없음
+        slide_thumbnail = slide.get_thumbnail(slide.level_dimensions[level]) 
+        slide_mask_ratio = round(slide.level_downsamples[level])
+        
+        slide_rgb = slide_thumbnail.convert('RGB') 
+        otsu_image = cv2.cvtColor(np.array(slide_rgb), cv2.COLOR_BGR2HSV)
 
-    kernel = np.ones((11, 11), dtype=np.uint8)
+        otsu_image_1 = otsu_image[:, :, 1]
+        otsu_image_2 = 1 - otsu_image[:, :, 2]
 
-    edge_mask = cv2.morphologyEx(edge_mask, cv2.MORPH_CLOSE, kernel)
-    edge_mask = cv2.morphologyEx(edge_mask, cv2.MORPH_OPEN, kernel)
+        if type(ROI_mask) != type(None):
+            otsu_image_1 = cv2.bitwise_and(otsu_image_1, ROI_mask)
+            otsu_image_2 = cv2.bitwise_and(otsu_image_2, ROI_mask)
 
-    # print(edge_mask.dtype, edge_mask.shape, edge_mask.max(), edge_mask.min(), edge_mask.mean())
+        otsu_image_1 = cv2.threshold(otsu_image_1, 0, 255,
+                                        cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        otsu_image_2 = cv2.threshold(otsu_image_2, 0, 255,
+                                        cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
-    return edge_mask, mask_slide_ratio
+        kernel = np.ones((11, 11), dtype=np.uint8)
 
+        otsu_image_1 = cv2.morphologyEx(otsu_image_1, cv2.MORPH_CLOSE, kernel)
+        otsu_image_1 = cv2.morphologyEx(otsu_image_1, cv2.MORPH_OPEN, kernel)
+        otsu_image_2 = cv2.morphologyEx(otsu_image_2, cv2.MORPH_CLOSE, kernel)
+        otsu_image_2 = cv2.morphologyEx(otsu_image_2, cv2.MORPH_OPEN, kernel)
+
+        otsu_image = np.logical_or(otsu_image_1, otsu_image_2)
+
+        if type(NOI_mask) != type(None):
+            exclusion = cv2.bitwise_and(otsu_image, NOI_mask)
+            otsu_image = otsu_image - exclusion
+        
+        return otsu_image.astype(float)*255, slide_mask_ratio
+
+    def make_tissue_mask_sobel(self, slide, ROI_mask, NOI_mask, level):
+
+        """
+        Args:
+            slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
+            ROI mask (np.array): ROI (Region of Interest) mask, a binary mask whose size is the same with the lowest resolution (level 3) of slide
+
+        get a tissue mask on ROI, using Edge Detection
+
+        RGB2GRAY -> Edge Detection (Sobel) -> Morphological Op. (Closing and Opening) 
+
+        Return:
+            edge mask (np.array): a gray image (binary mask)
+        """
+
+        # if slide.level_count < 4:
+        #     level_index = slide.level_count-1
+        # else:
+        #     level_index = 3
+
+        slide_thumbnail = slide.get_thumbnail(slide.level_dimensions[level]) 
+        slide_gray = np.array(slide_thumbnail.convert('L')) 
+
+        slide_mask_ratio = round(slide.level_downsamples[level])
+
+        if type(ROI_mask) != type(None):
+            slide_gray = cv2.bitwise_and(slide_gray, ROI_mask)
+
+        edge_mask = cv2.Sobel(src=slide_gray, ddepth=cv2.CV_64F, dx=1,dy=1, ksize=5)
+        edge_mask = cv2.convertScaleAbs(edge_mask) # to 0 ~ 255, 크게 상관은 없음
+
+        # edge detection이 목적이면 sobel edge detection을 x방향, y방향으로 따로 한 뒤 합쳐주는 게 맞지만,
+        # tissue를 background와 구분하기 위함이라면 앞에 sobel edge detection을 xy방향으로 한 번만 해줘도 크게 문제될 게 없음
+
+        kernel = np.ones((11, 11), dtype=np.uint8)
+
+        edge_mask = cv2.morphologyEx(edge_mask, cv2.MORPH_CLOSE, kernel)
+        edge_mask = cv2.morphologyEx(edge_mask, cv2.MORPH_OPEN, kernel)
+
+        if type(NOI_mask) != type(None):
+            # print(type(NOI_mask), type(edge_mask))
+            # print(NOI_mask)
+            # print(NOI_mask.shape, edge_mask.shape)
+            NOI_mask = cv2.resize(NOI_mask, (edge_mask.shape[1], edge_mask.shape[0]))
+            # print(NOI_mask.shape, edge_mask.shape)
+            exclusion = cv2.bitwise_and(edge_mask, NOI_mask)
+            edge_mask = edge_mask - exclusion
+            
+        return edge_mask, slide_mask_ratio
+
+    def get_mask_and_ratio(self, tissue_mask_type = 'sobel'):
+        if tissue_mask_type == 'otsu':
+            tissue_mask, slide_mask_ratio = self.make_tissue_mask_otsu(self.slide, self.ROI_mask, self.NOI_mask, self.level)
+        elif tissue_mask_type == 'sobel':
+            tissue_mask, slide_mask_ratio = self.make_tissue_mask_sobel(self.slide, self.ROI_mask, self.NOI_mask, self.level)
+        return tissue_mask, slide_mask_ratio
 
 def make_mask(slide):
     """ make tissue mask using HSV mode from openslide object.
@@ -212,3 +327,35 @@ def make_patch_(patch):
     patch = np.expand_dims(patch, axis=0)
     patch = np.ascontiguousarray(patch, dtype=np.float32)
     return patch
+
+
+
+"""
+Blankfield Correction
+"""
+# 영상내 밝기가 높은 값을 찾고, 그 영역의 밝기 평균을 구함
+def estimate_blankfield_white(image, ratio=0.01):
+    rgb = image.copy()
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+    for i in range(1, 256):
+        hist[i][0] += hist[i - 1][0]
+    N = hist[-1][0]
+    k = round(N * ratio / 2)
+    threshold = 255
+    while hist[threshold][0] > N - k:
+        threshold -= 1
+    mask = (gray >= threshold).astype(np.uint8)
+    white = np.array(cv2.mean(rgb, mask=mask)[:3], dtype=np.uint8)
+    return white
+
+# 영상내 밝기 높은 영역의 평균이 255가 되도록, 0~255로 변경
+def correct_background(image, white=None, ratio=0.01, target=255):
+    if white is None:
+        white = estimate_blankfield_white(image, ratio=ratio)
+    rgb = image.copy()
+    divider = np.zeros_like(rgb)
+    for ch in range(0, 3):
+        divider[:, :, ch] = white[ch]  
+    cv2.divide(rgb, divider, rgb, scale=target)
+    return rgb
