@@ -10,36 +10,6 @@ from torchvision import transforms
 
 
 """
-Blankfield Correction
-"""
-# 영상내 밝기가 높은 값을 찾고, 그 영역의 밝기 평균을 구함
-def estimate_blankfield_white(image, ratio=0.01):
-    rgb = image.copy()
-    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-    for i in range(1, 256):
-        hist[i][0] += hist[i - 1][0]
-    N = hist[-1][0]
-    k = round(N * ratio / 2)
-    threshold = 255
-    while hist[threshold][0] > N - k:
-        threshold -= 1
-    mask = (gray >= threshold).astype(np.uint8)
-    white = np.array(cv2.mean(rgb, mask=mask)[:3], dtype=np.uint8)
-    return white
-
-# 영상내 밝기 높은 영역의 평균이 255가 되도록, 0~255로 변경
-def correct_background(image, white=None, ratio=0.01, target=255):
-    if white is None:
-        white = estimate_blankfield_white(image, ratio=ratio)
-    rgb = image.copy()
-    divider = np.zeros_like(rgb)
-    for ch in range(0, 3):
-        divider[:, :, ch] = white[ch]  
-    cv2.divide(rgb, divider, rgb, scale=target)
-    return rgb
-
-"""
 input as Gray + Hematoxylin
 """
 def RGB2GH(image):
