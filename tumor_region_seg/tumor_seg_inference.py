@@ -14,14 +14,14 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--patch_dir', type=str, 
-                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch_on_ROI/sobel', help='patch directory')
-    parser.add_argument('--model_dir', type=str, default='', help='model directory (5 models corresponing to each fold)')
+                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch_on_ROI/sobel+blurrity_check', help='patch directory')
+    parser.add_argument('--model_dir', type=str, 
+                        default='./model', help='model directory (5 models corresponing to each fold)')
 
-    parser.add_argument('--local_rank', type=int, default=7, help='local rank (gpu idx)')
-    parser.add_argument('--fold', type = int, default = 1, help = 'which fold in 5-fold cv')
+    parser.add_argument('--local_rank', type=int, default=7 , help='local rank (gpu idx)')
     
     parser.add_argument('--input_type', type=str, default='RGB')
-    parser.add_argument('--batch_size', type=int, default=2)
+    parser.add_argument('--batch_size', type=int, default=1)
 
     args = parser.parse_args()
     print('')
@@ -123,14 +123,13 @@ if __name__ == '__main__':
     torch.cuda.set_device(rank)
     device = torch.device(f'cuda:{rank}')
 
-    model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/01_5-f_cv_baseline'
-    model_select = [207, 208, 263, 290, 285]
+    model_select = []
 
-    # model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/04_5-f_cv_BC'
-    # model_select = [99, 99, 89, 87, 98] # 200 epoch
+    model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/01_5-f_cv_baseline'
+    model_select = [207, 208, 263, 290, 285] 
 
     # model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/05_5-f_cv_GH'
-    # model_select = [87, 92, 84, 83, 99] # 200 epoch
+    # model_select = [124, 114, 132, 103, 107] # 200 epoch
   
     k_fold = 5
     nets = []
@@ -144,6 +143,8 @@ if __name__ == '__main__':
             net = UNet(input_ch=3).to(device)
         elif input_type == 'GH':
             net = UNet(input_ch=2).to(device)
+
+        # print(net)
         
         if len(model_select) == k_fold:
             net = net_test_load(ckpt_dir = ckpt_dir, net = net, epoch = model_select[i], device=device)
@@ -166,7 +167,6 @@ if __name__ == '__main__':
         
         start_time = time.time()
         data_dir = os.path.join(patch_dir, slide_id, '200x')
-        # mask_save_dir = f'{model_dir}/output/slide/{slide_id}'
         mask_save_dir = f'{model_dir}/output/slide/{slide_id}'
         plot_save_dir = mask_save_dir + '/plot'
 
