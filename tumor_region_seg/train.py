@@ -5,6 +5,7 @@ from torch.utils.tensorboard import SummaryWriter
 # from torch.nn.parallel.distributed import DistributedDataParallel as DDP
 # import torch.distributed as dist
 # import torch.multiprocessing as mp
+from tqdm import tqdm
 
 from data_utils import *
 from model import *
@@ -12,18 +13,21 @@ from model import *
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
-    # parser.add_argument('--data_dir', type=str, help='WSI data directory')
-    # parser.add_argument('--ckpt_dir', type=str, help='directory where models would be saved')
-    # parser.add_argument('--log_dir', type=str, help='directory where log of model training would be saved')
-    parser.add_argument('--local_rank', type=int, default=0, help='local rank')
+    parser.add_argument('--data_dir', type=str, help='WSI data directory',
+                        default = '/mnt/hdd1/c-MET_datasets/SLIDE_DATA/DL-based_tumor_seg_dataset/2205_1차anno')
+    parser.add_argument('--model_dir', type=str, help='directory where logs and models would be saved',
+                        default = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data')
+
+    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local rank')
     parser.add_argument('--fold', type = int, default = 1, help = 'which fold in 5-fold cv')
-    
+    parser.add_argument('--data_type', type=str, default = 'samsung', 
+                        help='samsung have no each fold directory (sample or samsung)')
+
     parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--lr', type=float, default=1e-3)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--n_epoch', type=int, default=100)
-
-
+    
     args = parser.parse_args()
     print('')
     print('args={}\n'.format(args))
@@ -49,16 +53,24 @@ def train(rank, data_loader, lr, num_epoch, input_type):
 
     loader_train, loader_val = data_loader
 
-    device = torch.device(f'cuda:{rank}')
-
-    if input_type == 'RGB':
-        net = UNet(input_ch = 3).to(device)
-    elif input_type == 'GH':
-        net = UNet(input_ch = 2).to(device)
-
     # net = DDP(net, device_ids=[rank], output_device=rank)
+    
 
-    optim = torch.optim.Adam(net.parameters(), lr = lr)
+    if len(rank) != 1:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        net = UNet(input_type)
+        optim = torch.optim.Adam(net.to(device).parameters(), lr = lr)
+        net, optim, start_epoch = net_load(ckpt_dir=ckpt_dir, net=net, optim=optim)
+        net = torch.nn.DataParallel(net, device_ids=rank)
+        net = net.to(device)
+
+    else:
+        # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
+        device = torch.device(f'cuda:{rank}')
+        net = UNet(input_type).to(device)
+        optim = torch.optim.Adam(net.parameters(), lr = lr)
+        net, optim, start_epoch = net_load(ckpt_dir=ckpt_dir, net=net, optim=optim, device=device) 
+  
     fn_loss = torch.nn.BCEWithLogitsLoss().to(device)
 
     fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
@@ -69,12 +81,16 @@ def train(rank, data_loader, lr, num_epoch, input_type):
     writer_val = SummaryWriter(log_dir = os.path.join(log_dir, 'valid'))
 
     start_epoch = 0
-    net, optim, start_epoch = net_load(ckpt_dir=ckpt_dir, net=net, optim=optim, device=device) # 저장된 네트워크 불러오기
+    
+    
 
     for epoch in range(start_epoch+1,start_epoch+num_epoch +1):
         net.train()
         tr_loss_arr = []
-        for batch, data in enumerate(loader_train, 1):
+
+        # for batch, data in enumerate(loader_train, 1):
+        for batch, data in enumerate(tqdm(loader_train, total = len(loader_train), postfix = 'train'), 1):
+        
             # forward
             # label = data['label'].to(device, non_blocking=True)   
             # inputs = data['input'].to(device, non_blocking=True)
@@ -98,7 +114,8 @@ def train(rank, data_loader, lr, num_epoch, input_type):
             output = fn_tonumpy(fn_classifier(output))
 
             writer_train.add_image('label', label, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
-            # writer_train.add_image('input', inputs, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
+            if input_type == 'RGB':
+                writer_train.add_image('input', inputs, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
             writer_train.add_image('output', output, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
 
         writer_train.add_scalar('loss', np.mean(tr_loss_arr), epoch)
@@ -108,7 +125,8 @@ def train(rank, data_loader, lr, num_epoch, input_type):
             net.eval() # 네트워크를 evaluation 용으로 선언
             val_loss_arr = []
 
-            for batch, data in enumerate(loader_val,1):
+            # for batch, data in enumerate(loader_val,1):
+            for batch, data in enumerate(tqdm(loader_val, total = len(loader_train), postfix = 'valid'), 1):
                 # # forward
                 # label = data['label'].to(device, non_blocking=True)
                 # inputs = data['input'].to(device, non_blocking=True)
@@ -127,7 +145,8 @@ def train(rank, data_loader, lr, num_epoch, input_type):
                 output = fn_tonumpy(fn_classifier(output))
 
                 writer_val.add_image('label', label, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
-                # writer_val.add_image('input', inputs, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
+                if input_type == 'RGB':
+                    writer_val.add_image('input', inputs, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
                 writer_val.add_image('output', output, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
 
             writer_val.add_scalar('loss', np.mean(val_loss_arr), epoch)
@@ -140,39 +159,62 @@ def train(rank, data_loader, lr, num_epoch, input_type):
 
         net_save(ckpt_dir=ckpt_dir, net = net, optim = optim, epoch = epoch)
 
-def main(rank, world_size):
+# def main(rank, world_size):
 
-    print(f'# of gpu: {world_size}, gpu id: {rank}\n')
+#     print(f'# of gpu: {world_size}, gpu id: {rank}\n')
 
-    data_loader = create_data_loader(data_dir, batch_size, input_type)
-    train(rank, data_loader, lr, num_epoch, input_type)
+#     data_loader = create_data_loader(data_dir, batch_size, input_type)
+
+#     train(rank, data_loader, lr, num_epoch, input_type)
 
 
 if __name__ == '__main__':
 
     args = parse_arguments()
-
-    data_dir = f'/mnt/hdd1/c-MET_datasets/Lung_c-MET IHC_scored/DL-based_tumor_seg_dataset/{args.fold}-fold'
-    ckpt_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/05_5-f_cv_GH/{args.fold}-fold/checkpoint'
-    log_dir = f'/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/05_5-f_cv_GH/{args.fold}-fold/log'
-
-    input_type = args.input_type
-    lr = args.lr
-    batch_size = args.batch_size
-    num_epoch = args.n_epoch
     
-
     rank = args.local_rank
     world_size = torch.cuda.device_count() #8
 
-    torch.cuda.set_device(rank)
-    
+
+    torch.cuda.set_device(rank[0])
+
     # os.environ['MASTER_ADDR'] = '192.168.0.38'
     # os.environ['MASTER_PORT'] = '10011'
 
     # dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
+    transform_val = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
 
-    main(rank=rank, world_size=world_size)
+    input_type = args.input_type
+    batch_size = args.batch_size
+
+    if args.data_type == 'sample':
+        data_dir = f'{args.data_dir}/{args.fold}-fold'
+        dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train, input_type = input_type)
+        dataset_val = Dataset(data_dir=os.path.join(data_dir, 'valid'), transform = transform_val, input_type = input_type) 
+
+    elif args.data_type == 'samsung':
+        data_dir = args.data_dir
+        train_list, valid_list = construct_train_valid(data_dir, test_fold = args.fold)
+
+        dataset_train = SamsungDataset(data_dir = data_dir, data_list = train_list, transform = transform_train, input_type = input_type)
+        dataset_val = SamsungDataset(data_dir= data_dir, data_list = valid_list, transform = transform_val, input_type = input_type) 
+    
+    loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
+    loader_val = DataLoader(dataset_val, batch_size = batch_size, shuffle=True)
+
+    print(f'# of gpu: {world_size}, gpu id: {rank}\n')
+
+    lr = args.lr
+    
+    num_epoch = args.n_epoch
+
+    ckpt_dir = f'{args.model_dir}/{args.fold}-fold/checkpoint'
+    log_dir = f'{args.model_dir}/{args.fold}-fold/log'
+
+    train(rank, (loader_train, loader_val), lr, num_epoch, input_type)
+
+    # main(rank=rank, world_size=world_size)
     
     # mp.spawn(main, 
     #         args=(world_size,),
