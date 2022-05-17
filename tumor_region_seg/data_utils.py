@@ -1,3 +1,4 @@
+from ast import Break
 import os
 import cv2
 from PIL import Image
@@ -40,26 +41,26 @@ class Dataset(torch.utils.data.Dataset):
 
         data = sorted(os.listdir(self.data_dir))
 
-        img_list, label_list = [], []
+        input_list, label_list = [], []
         for f in sorted(data):
             if 'sample' in f:
             # if 'sample' in f and 'S-LC' not in f:
-                img_list.append(f)
+                input_list.append(f)
             elif 'label' in f: 
             # elif 'label' in f and 'S-LC' not in f:
                 label_list.append(f)
 
-        self.img_list = img_list
+        self.input_list = input_list
         self.label_list = label_list
 
     def __len__(self):
-        return len(self.img_list)
+        return len(self.input_list)
 
     def __getitem__(self, index):
 
-        if len(self.img_list) == len(self.label_list):
+        if len(self.input_list) == len(self.label_list):
 
-            input = Image.open(os.path.join(self.data_dir, self.img_list[index]))
+            input = Image.open(os.path.join(self.data_dir, self.input_list[index]))
             label = Image.open(os.path.join(self.data_dir, self.label_list[index])).convert("L")
             
             input, label = np.array(input), np.array(label)
@@ -84,6 +85,101 @@ class Dataset(torch.utils.data.Dataset):
                 data = self.transform(data)
 
             return data
+
+
+"""
+삼성병원 데이터셋 1차 annotation 
+
+tumor label 기준으로 non_tumorable, tumorable을 구분하여 
+5-fold로 해당 파일명들을 (input, label)로 array에 저장해두고  
+각각 동일한 비율로 train, valid 구성 
+
+"""
+def construct_train_valid(data_dir, test_fold = 5):
+    folds = [1, 2, 3, 4, 5]
+    folds.remove(test_fold)
+
+    tumorable_TRAIN, non_tumorable_TRAIN = [], []
+    for i in folds:
+        tumorable_TRAIN.append(np.load(f'{data_dir}/{i}-fold_tumorable_data.npy'))
+        non_tumorable_TRAIN.append(np.load(f'{data_dir}/{i}-fold_non_tumorable_data.npy'))
+
+    tumorable_TRAIN = np.concatenate(tumorable_TRAIN)
+    non_tumorable_TRAIN = np.concatenate(non_tumorable_TRAIN)
+
+    t_train, t_valid = split_train_valid(tumorable_TRAIN, 0.2)
+    n_train, n_valid = split_train_valid(non_tumorable_TRAIN, 0.2)
+
+    train = np.vstack([t_train, n_train])
+    valid = np.vstack([t_valid, n_valid])
+
+    return train, valid
+
+def split_train_valid(TRAIN_list, valid_ratio = 0.2):
+    total_n = len(TRAIN_list)
+    valid_idx = np.random.choice(total_n, size = int(total_n*valid_ratio), replace = False)
+    train_idx = np.setdiff1d([i for i in range(total_n)], valid_idx)
+    return TRAIN_list[train_idx], TRAIN_list[valid_idx]
+
+class SamsungDataset(torch.utils.data.Dataset):
+
+    def __init__(self, data_dir, data_list, patch_mag = 200, patch_size = 256, transform=None, input_type='RGB'):
+        self.data_dir = data_dir
+        self.data_list = data_list
+        self.transform = transform
+        self.input_type = input_type
+        self.patch_mag = patch_mag
+        self.patch_size = patch_size
+
+        input_list, label_list = [], []
+
+        # print(data_list)
+        for f in self.data_list:
+            # print(f)
+ 
+            assert f[0].split('_input')[0] == f[1].split('_label')[0], f'check the pairness btw input {f[0]} and label {f[1]}'
+
+            input_list.append(f[0])
+            label_list.append(f[1])
+
+        self.input_list = input_list
+        self.label_list = label_list
+
+    def __len__(self):
+        return len(self.input_list)
+
+    def __getitem__(self, index):
+ 
+        assert len(self.input_list) == len(self.label_list), f'# of images {len(self.img_list)}, # of labels {len(self.label_list)}' 
+        assert self.input_list[index].split('MET')[0] == self.label_list[index].split('MET')[0], f'image {self.input_list[index]}, label {self.label_list[index]}'
+
+        parent_dir = self.input_list[index].split('MET')[0] + 'MET'
+
+        input = Image.open(os.path.join(self.data_dir, 'patch', parent_dir, f'{self.patch_mag}x_{self.patch_size}', self.input_list[index]))
+        label = Image.open(os.path.join(self.data_dir, 'patch', parent_dir, f'{self.patch_mag}x_{self.patch_size}', self.label_list[index])).convert("L")
+        
+        input, label = np.array(input), np.array(label)
+        
+        # Blankfield Correction, 밝은 영역 평균을 구해 그걸로 255로 맞추고 scale 다시 맞추는 작업
+        # input = correct_background(input)
+
+        input, label = input/255.0, label/255.0
+        input, label = input.astype(np.float32), label.astype(np.float32)
+
+        if self.input_type == 'GH':
+            input = RGB2GH(input)
+
+        if label.ndim == 2:
+            label = label[:, :, np.newaxis]
+        if input.ndim == 2:
+            input = input[:, :, np.newaxis]
+
+        data = {'input': input, 'label': label}
+
+        if self.transform:
+            data = self.transform(data)
+
+        return data
 
 # preprocssing could be in transforms.Compose
 
