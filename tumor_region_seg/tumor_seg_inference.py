@@ -138,12 +138,8 @@ if __name__ == '__main__':
         print(f'{i+1}-fold - ', end = '')
  
         ckpt_dir = f'{model_dir}/{i+1}-fold/checkpoint'
-        
-        if input_type == 'RGB':
-            net = UNet(input_ch=3).to(device)
-        elif input_type == 'GH':
-            net = UNet(input_ch=2).to(device)
 
+        net = UNet(input_type).to(device)
         # print(net)
         
         if len(model_select) == k_fold:
