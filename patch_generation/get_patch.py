@@ -5,7 +5,7 @@ import numpy as np
 from xml.etree.ElementTree import parse
 from random import shuffle
 from model_laplacian import *
-from tissue_masking_utils import *
+from slide_utils import *
 from multiprocessing import Pool, Manager
 import time
 
