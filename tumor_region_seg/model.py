@@ -1,4 +1,5 @@
 import os
+from typing import OrderedDict
 import torch
 import torch.nn as nn
 
@@ -24,15 +25,24 @@ def net_load(ckpt_dir, net, optim, device=None):
     ckpt_lst = os.listdir(ckpt_dir) # ckpt_dir 아래 있는 모든 파일 리스트를 받아온다
     ckpt_lst.sort(key = lambda f : int(''.join(filter(str.isdigit,f))))
 
+    print('Initial Weights: ', ckpt_lst[-1])
+
     if device != None:
         dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location=device)
+        net.load_state_dict(dict_model['net'])
     else:
         dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location='cpu')
-    
-    net.load_state_dict(dict_model['net'])
+        net_state_dict_ = OrderedDict()
+        for k, v in dict_model['net'].items():
+            name  = k.replace("module.", "")
+            net_state_dict_[name] = v
+        net.load_state_dict(net_state_dict_)
+  
+    # net.load_state_dict(dict_model['net'])
     optim.load_state_dict(dict_model['optim'])
     epoch = int(ckpt_lst[-1].split('epoch')[1].split('.pth')[0])
 
+    # print('Initial Weights: ', ckpt_lst[-1], 'Epoch: ', epoch)
     return net,optim,epoch
 
 
@@ -41,7 +51,7 @@ Networks
 """
 
 class UNet(nn.Module):
-    def __init__(self, input_type = 'RGB'):
+    def __init__(self, input_type = 'RGB', DataParallel = False):
         super(UNet, self).__init__()
 
         if input_type == 'RGB':
@@ -52,6 +62,9 @@ class UNet(nn.Module):
         def CBR_2D(in_ch, out_ch, k_size = 3, stride = 1, padding = 1, bias = True):
             layers =[]
             layers += [nn.Conv2d(in_channels=in_ch, out_channels=out_ch, kernel_size=k_size, stride=stride, padding=padding, bias=bias)]
+        
+            # if DataParallel == True:
+            #     layers += [nn.SyncBatchNorm(num_features=out_ch)] ->> Default process group is not initialized
             layers += [nn.BatchNorm2d(num_features=out_ch)]
             layers += [nn.ReLU()]
 
