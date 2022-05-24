@@ -1,14 +1,11 @@
-from ast import Break
 import os
 import cv2
 from PIL import Image
 import skimage.color
 import numpy as np
 import torch
-from typing import Tuple
 from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms
-
 
 """
 input as Gray + Hematoxylin
@@ -95,6 +92,13 @@ tumor label 기준으로 non_tumorable, tumorable을 구분하여
 각각 동일한 비율로 train, valid 구성 
 
 """
+
+def split_train_valid(TRAIN_list, valid_ratio = 0.2):
+    total_n = len(TRAIN_list)
+    valid_idx = np.random.choice(total_n, size = int(total_n*valid_ratio), replace = False)
+    train_idx = np.setdiff1d([i for i in range(total_n)], valid_idx)
+    return TRAIN_list[train_idx], TRAIN_list[valid_idx]
+
 def construct_train_valid(data_dir, test_fold = 5):
     folds = [1, 2, 3, 4, 5]
     folds.remove(test_fold)
@@ -115,11 +119,17 @@ def construct_train_valid(data_dir, test_fold = 5):
 
     return train, valid
 
-def split_train_valid(TRAIN_list, valid_ratio = 0.2):
-    total_n = len(TRAIN_list)
-    valid_idx = np.random.choice(total_n, size = int(total_n*valid_ratio), replace = False)
-    train_idx = np.setdiff1d([i for i in range(total_n)], valid_idx)
-    return TRAIN_list[train_idx], TRAIN_list[valid_idx]
+def construct_test(data_dir, test_fold = 1):
+    tumorable_test = np.load(f'{data_dir}/{test_fold}-fold_tumorable_data.npy')
+    non_tumorable_test = np.load(f'{data_dir}/{test_fold}-fold_non_tumorable_data.npy')
+
+    tumorable_test = np.array(tumorable_test)
+    non_tumorable_test = np.array(non_tumorable_test)
+
+    # print(tumorable_test.shape, non_tumorable_test.shape)
+
+    test = np.vstack([tumorable_test, non_tumorable_test])
+    return test
 
 class SamsungDataset(torch.utils.data.Dataset):
 
