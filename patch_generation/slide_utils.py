@@ -57,8 +57,6 @@ def get_ROI_mask(slide, xml_path):
 
     return ROI_mask
 
-
-
 """
 Label maker
 """
@@ -69,16 +67,8 @@ import multiprocessing as mp
 # pool.join()
 class Annotation:
     def __init__(self, slide, level = -1):
-
-        # self.slide_path = slide_path
-        # self.slide = openslide.OpenSlide(slide_path)
-
         self.slide = slide
         self.level = level
-
-        # slide_thumbnail = self.slide.get_thumbnail(self.slide.level_dimensions[self.level])
-        # slide_thumbnail = slide_thumbnail.convert('RGB')
-        # self.slide_thumbnail = np.array(slide_thumbnail)
 
     def get_coordinates(self, xml_path, target = 'tumor_region'):
 
@@ -120,7 +110,6 @@ class Annotation:
     #     cv2.drawContours(mask, _anno, -1, color, -1)
     
     def make_mask(self, annotations, color = 255):
-
         width, height = self.slide.level_dimensions[self.level]
         mask = np.zeros((height, width)).astype(np.uint8)
         # mask = np.zeros((height, width, 3)).astype(np.uint8)
@@ -245,11 +234,7 @@ class TissueMask:
         edge_mask = cv2.morphologyEx(edge_mask, cv2.MORPH_OPEN, kernel)
 
         if type(NOI_mask) != type(None):
-            # print(type(NOI_mask), type(edge_mask))
-            # print(NOI_mask)
-            # print(NOI_mask.shape, edge_mask.shape)
             NOI_mask = cv2.resize(NOI_mask, (edge_mask.shape[1], edge_mask.shape[0]))
-            # print(NOI_mask.shape, edge_mask.shape)
             exclusion = cv2.bitwise_and(edge_mask, NOI_mask)
             edge_mask = edge_mask - exclusion
             
