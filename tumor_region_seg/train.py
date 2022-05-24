@@ -34,7 +34,7 @@ def parse_arguments():
 
     return args
 
-def create_data_loader(data_dir: str, batch_size: int, input_type: str) -> Tuple[DataLoader, DataLoader]: 
+def create_data_loader(data_dir, batch_size, input_type = 'RGB'): 
 
     # transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
     transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
