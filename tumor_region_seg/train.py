@@ -16,7 +16,7 @@ def parse_arguments():
     parser.add_argument('--data_dir', type=str, help='WSI data directory',
                         default = '/mnt/hdd1/c-MET_datasets/SLIDE_DATA/DL-based_tumor_seg_dataset/2205_1차anno')
     parser.add_argument('--model_dir', type=str, help='directory where logs and models would be saved',
-                        default = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data')
+                        default = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/dp')
 
     parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local rank')
     parser.add_argument('--fold', type = int, default = 1, help = 'which fold in 5-fold cv')
@@ -54,11 +54,11 @@ def train(rank, data_loader, lr, num_epoch, input_type):
     loader_train, loader_val = data_loader
 
     # net = DDP(net, device_ids=[rank], output_device=rank)
-    
+    start_epoch = 0
 
     if len(rank) != 1:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        net = UNet(input_type)
+        net = UNet(input_type, DataParallel=True)
         optim = torch.optim.Adam(net.to(device).parameters(), lr = lr)
         net, optim, start_epoch = net_load(ckpt_dir=ckpt_dir, net=net, optim=optim)
         net = torch.nn.DataParallel(net, device_ids=rank)
@@ -79,10 +79,6 @@ def train(rank, data_loader, lr, num_epoch, input_type):
 
     writer_train = SummaryWriter(log_dir = os.path.join(log_dir, 'train'))
     writer_val = SummaryWriter(log_dir = os.path.join(log_dir, 'valid'))
-
-    start_epoch = 0
-    
-    
 
     for epoch in range(start_epoch+1,start_epoch+num_epoch +1):
         net.train()
@@ -113,10 +109,10 @@ def train(rank, data_loader, lr, num_epoch, input_type):
             inputs = fn_tonumpy(fn_denorm(inputs,0.5,0.5))
             output = fn_tonumpy(fn_classifier(output))
 
-            writer_train.add_image('label', label, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
-            if input_type == 'RGB':
-                writer_train.add_image('input', inputs, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
-            writer_train.add_image('output', output, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
+            # writer_train.add_image('label', label, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
+            # if input_type == 'RGB':
+                # writer_train.add_image('input', inputs, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
+            # writer_train.add_image('output', output, len(loader_train) * (epoch - 1) + batch, dataformats='NHWC')
 
         writer_train.add_scalar('loss', np.mean(tr_loss_arr), epoch)
 
@@ -126,7 +122,7 @@ def train(rank, data_loader, lr, num_epoch, input_type):
             val_loss_arr = []
 
             # for batch, data in enumerate(loader_val,1):
-            for batch, data in enumerate(tqdm(loader_val, total = len(loader_train), postfix = 'valid'), 1):
+            for batch, data in enumerate(tqdm(loader_val, total = len(loader_val), postfix = 'valid'), 1):
                 # # forward
                 # label = data['label'].to(device, non_blocking=True)
                 # inputs = data['input'].to(device, non_blocking=True)
@@ -144,10 +140,10 @@ def train(rank, data_loader, lr, num_epoch, input_type):
                 inputs = fn_tonumpy(fn_denorm(inputs, mean=0.5, std=0.5))
                 output = fn_tonumpy(fn_classifier(output))
 
-                writer_val.add_image('label', label, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
-                if input_type == 'RGB':
-                    writer_val.add_image('input', inputs, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
-                writer_val.add_image('output', output, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
+                # writer_val.add_image('label', label, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
+                # if input_type == 'RGB':
+                    # writer_val.add_image('input', inputs, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
+                # writer_val.add_image('output', output, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
 
             writer_val.add_scalar('loss', np.mean(val_loss_arr), epoch)
             # print('valid : epoch %04d / %04d | Loss %.05f'%(epoch, num_epoch, np.mean(val_loss_arr)))
