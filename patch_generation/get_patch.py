@@ -20,7 +20,7 @@ def parse_arguments():
     parser.add_argument('--ROI_dir', action="store", type=str,
                         default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/ROI_annotation', help='rough tissue region annotation (.xml) directory')
     parser.add_argument('--label_dir', action="store", type=str,
-                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/1차annotation/annotation', help='tumor annotation (.xml) directory')
+                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/tumor_annotation/annotation', help='tumor annotation (.xml) directory')
 
     parser.add_argument('--save_dir', action="store", type=str,
                         default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch', help='directory where it will save patches')
@@ -30,6 +30,7 @@ def parse_arguments():
 
     parser.add_argument('--patch_mag', action="store", nargs='+', type=int,
                         default=[200], help='target magnifications of generated patches')
+
     parser.add_argument('--patch_size', action="store", type=int,
                         default=1024, help='a width/height length of squared patches')
     parser.add_argument('--tissue_th', action="store", type=float,
@@ -37,7 +38,8 @@ def parse_arguments():
     parser.add_argument('--blur_th', action="store", type=int,
                         default=100, help='threshold about blurrity of each patch_')
 
-    parser.add_argument('--label_level', action="store", type=int, default = 1)
+    parser.add_argument('--label_level', action="store", type=int, 
+                        default = 1)
 
     args = parser.parse_args()
     print('')
@@ -83,7 +85,6 @@ def read_regions_semi(params):
         return e
 
 def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_mag = 200):
-    # slide_name, _organ, mpp, slide_dir, _, _, _, _, _ = line
     
     slide_name = slide_file[:-4]
     slide_path = args.slide_dir + '/' + slide_file
@@ -102,11 +103,12 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
     # tumor_label -> target tissue 영역 안의 tumor annotation
     # non_target_label -> target tissue 영역 안의 non target object annotation (benign에도 비포함) 
     ROI_mask, tumor_label, non_target_label, label_level = None, None, None, None
-    # if ROI_file != None:
-    #     ROI_path = args.ROI_dir + '/' + ROI_file
-    #     RAN = Annotation(slide = slide, level = -1)
-    #     ROI_annotations, _ = RAN.get_coordinates(xml_path = ROI_path, target = 'tissue_region')
-    #     ROI_mask = RAN.make_mask(annotations=ROI_annotations, color = 255)
+    if ROI_file != None:
+        ROI_path = args.ROI_dir + '/' + ROI_file
+        RAN = Annotation(slide = slide, level = -1)
+        ROI_annotations, _ = RAN.get_coordinates(xml_path = ROI_path, target = 'tissue_region')
+        ROI_mask = RAN.make_mask(annotations=ROI_annotations, color = 255)
+        # cv2.imwrite(args.save_dir + f'/{slide_name}_ROI_mask.jpg', ROI_mask)
 
     if label_file != None:
         label_path = args.label_dir + '/' + label_file
@@ -114,12 +116,14 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
         TAN = Annotation(slide = slide, level = label_level)
         tumor_annotations, non_target_annotations = TAN.get_coordinates(xml_path = label_path, target = 'tumor_region')
         tumor_label = TAN.make_mask(annotations=tumor_annotations, color = 255)
+        # cv2.imwrite(args.save_dir + f'/{slide_name}_tumor_mask.jpg', tumor_label)
         if len(non_target_annotations) != 0:
             non_target_label = TAN.make_mask(annotations=non_target_annotations, color = 255)
-
+            # cv2.imwrite(args.save_dir + f'/{slide_name}_non_target_mask.jpg', non_target_label)
 
     TM = TissueMask(slide = slide, level = -1, ROI_mask = ROI_mask, NOI_mask = non_target_label)
     tissue_mask, slide_mask_ratio = TM.get_mask_and_ratio(tissue_mask_type = args.tissue_mask_type)
+    # cv2.imwrite(args.save_dir + f'/{slide_name}_tissue_mask.jpg', tissue_mask)
 
     if not os.path.isfile(args.save_dir + f'/{slide_name}_tissue_mask.jpg'):
         cv2.imwrite(args.save_dir + f'/{slide_name}_tissue_mask.jpg', tissue_mask)
@@ -146,7 +150,20 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
     
     # shuffle(total_point)
     num_total_patch = len(total_point)
-    print(f"{slide_name} ({slide_mag}x, mpp: {mpp}) |=> patch mag: {target_mag}x, size: {patch_size}, # of patch: {num_total_patch}")
+    print(f"{slide_mag}x, mpp: {mpp} |=> patch mag: {target_mag}x, size: {patch_size}, # of total coordinates: {num_total_patch}")
+
+    batch_size = 64
+    blur_th = args.blur_th 
+    step_size = patch_size//sliding_window
+    slide_step_size = mpp_ratio*step_size
+
+    mask_step_size = slide_step_size//slide_mask_ratio
+
+    if label_level != None:
+        slide_label_ratio = round(slide.level_downsamples[label_level])
+        label_step_size = slide_step_size//slide_label_ratio
+
+        # print('slide mag:', slide_mag, 'patch mag:', target_mag, 'label level:', label_level, 'actual side length on label:', label_step_size)
 
     n_process = 12
     queue_size = 15 * n_process
@@ -166,31 +183,18 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
     slide_thumbnail = slide_thumbnail.convert('RGB')
     slide_ = np.array(slide_thumbnail, dtype=np.uint8)
 
-    # _save_dir = os.path.join(args.save_dir, 'patch', slide_name)
+    img_list, point_list, patch_list = [], [], []
+
+    count = 0
+
     _save_dir = os.path.join(args.save_dir, slide_name)
     
     os.makedirs(_save_dir, exist_ok = True)
-    # try: os.makedirs(_save_dir)
-    # except: print(f"{_save_dir} already exists")
     
     patch_save_dir = os.path.join(_save_dir, f'{target_mag}x_{patch_size}')
     try: os.mkdir(patch_save_dir)
     except: print(f"{patch_save_dir} already exists")
 
-    batch_size = 64
-    blur_th = args.blur_th 
-    step_size = patch_size//sliding_window
-    slide_step_size = mpp_ratio*step_size
-
-    mask_step_size = slide_step_size//slide_mask_ratio
-
-    if label_level != None:
-        slide_label_ratio = round(slide.level_downsamples[label_level])
-        label_step_size = slide_step_size//slide_label_ratio
-    # mask_step_size = (mpp_ratio*(patch_size//sliding_window))//slide_mask_ratio
-    img_list, point_list, patch_list = [], [], []
-
-    count = 0
     while True:
         if queue.empty():
             if not result.ready():
@@ -215,7 +219,7 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
                     _x, _y = point_list[ii]
                     img = img_list[ii]
                     if output[ii] > blur_th:
-                        img.convert('RGB').save(os.path.join(patch_save_dir, slide_name + '_' + str(_x)+'_'+str(_y)+'.jpg'))
+                        img.convert('RGB').save(os.path.join(patch_save_dir, slide_name + '_' + str(_x)+'_'+str(_y)+'_input.jpg'))
                         slide_ = cv2.rectangle(slide_, (_x//slide_mask_ratio, _y//slide_mask_ratio), 
                         (_x//slide_mask_ratio+mask_step_size, _y//slide_mask_ratio+mask_step_size), color=(0, 255, 0), thickness=2)
 
@@ -223,14 +227,15 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
                             img_label = tumor_label[_y//slide_label_ratio:_y//slide_label_ratio+label_step_size, 
                                                         _x//slide_label_ratio:_x//slide_label_ratio+label_step_size]
 
-                            # print(_y, _x, mask_step_size)
-                            # print(tumor_label.shape)
-                            # print(img_label.shape)
-                            cv2.imwrite(os.path.join(patch_save_dir, slide_name + '_' + str(_x)+'_'+str(_y)+'_label.jpg'), 
-                                        cv2.resize(img_label, (patch_size, patch_size)))
+                            img_label = cv2.resize(img_label, (patch_size, patch_size))
+                            img_label = ((img_label > 0)*255).astype('uint8')
+
+                            # binary는 jpg로 저장하면 0, 255가 아니고 불러왔을 때 {0, 1, 2, 3, 4, 5, 250, 251, 252, 253, 254, 255} 값이 나옴
+                            # png는 0, 255 값을 보존하고 오히려 jpg로 저장했을 때보다 용량이 적게 차지 (통상적으로 png가 jpg보다 용량이 큼)
+                            cv2.imwrite(os.path.join(patch_save_dir, slide_name + '_' + str(_x)+'_'+str(_y)+'_label.png'), 
+                                        img_label)
                         
                         count += 1
-
                 img_list, point_list, patch_list = [], [], []
     if not result.successful():
         print('Something wrong in result')
@@ -249,13 +254,13 @@ if __name__ == "__main__":
     # issues = [118]
     # slide_list = sorted([svs for svs in os.listdir(args.slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
 
-    # target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
-    # target_slides = [80, 87, 90, 94, 106, 107]
-    target_slides = [106]
+    target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107] # 1차 annotation
+    # target_slides = [80]
     slide_list = sorted([svs for svs in os.listdir(args.slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
 
     total_time = 0
     for i, (slide_file) in enumerate(slide_list):
+        print(slide_file[:-4])
         for target_mag in args.patch_mag:
             start_time = time.time()
             slide_name = slide_file[:-4]
@@ -271,8 +276,5 @@ if __name__ == "__main__":
             taken = end_time - start_time
             print(f'time: {round(taken, 2)} sec')
             total_time += taken
-        
-        # if i == 2:
-        #     break
 
     print(f'total time: {round(total_time, 2)} sec')
