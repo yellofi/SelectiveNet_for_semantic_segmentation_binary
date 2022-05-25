@@ -25,7 +25,7 @@ def net_load(ckpt_dir, net, optim, device=None):
     ckpt_lst = os.listdir(ckpt_dir) # ckpt_dir 아래 있는 모든 파일 리스트를 받아온다
     ckpt_lst.sort(key = lambda f : int(''.join(filter(str.isdigit,f))))
 
-    print('Initial Weights: ', ckpt_lst[-1])
+    print('model: ', ckpt_lst[-1])
 
     if device != None:
         dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location=device)
@@ -42,7 +42,6 @@ def net_load(ckpt_dir, net, optim, device=None):
     optim.load_state_dict(dict_model['optim'])
     epoch = int(ckpt_lst[-1].split('epoch')[1].split('.pth')[0])
 
-    # print('Initial Weights: ', ckpt_lst[-1], 'Epoch: ', epoch)
     return net,optim,epoch
 
 
