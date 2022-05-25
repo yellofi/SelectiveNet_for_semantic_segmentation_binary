@@ -10,7 +10,11 @@ from multiprocessing import Pool, Manager
 import time
 
 model = load_model()
-model = model.cuda()
+# model = model.cuda()
+# device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# model = torch.nn.DataParallel(model, device_ids=[i for i in range(8)])
+# model = model.to(device)
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -132,12 +136,10 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
         print(f'You can extract patches at lower magnification (slide magnification: {slide_mag}')
         return
     
-    if target_mag == 400:
-        tissue_th = 0.3
-    elif target_mag == 200:
-        tissue_th = 0.1
-    else:
-        tissue_th = args.tissue_th
+    # if target_mag == 400:
+    #     tissue_th = 0.3
+    # elif target_mag == 200:
+    #     tissue_th = 0.1
 
     sliding_window = 1
     patch_size = args.patch_size
@@ -153,6 +155,7 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
     print(f"{slide_mag}x, mpp: {mpp} |=> patch mag: {target_mag}x, size: {patch_size}, # of total coordinates: {num_total_patch}")
 
     batch_size = 64
+    tissue_th = args.tissue_th
     blur_th = args.blur_th 
     step_size = patch_size//sliding_window
     slide_step_size = mpp_ratio*step_size
@@ -211,9 +214,12 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
             (result.ready() and queue.empty() and len(patch_list) > 0):
 
                 with torch.autograd.no_grad():
-                    batch = torch.FloatTensor(np.stack(patch_list)).cuda()
+                    # batch = torch.FloatTensor(np.stack(patch_list)).cuda()
+                    batch = torch.FloatTensor(np.stack(patch_list))
                     output = model(batch)
-                output = output.cpu().data.numpy()
+
+                # output = output.cpu().data.numpy()
+                output = output.data.numpy()
                 output = np.var(output, axis=(1, 2, 3))
                 for ii in range(len(patch_list)):
                     _x, _y = point_list[ii]
@@ -228,7 +234,7 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
                                                         _x//slide_label_ratio:_x//slide_label_ratio+label_step_size]
 
                             img_label = cv2.resize(img_label, (patch_size, patch_size))
-                            img_label = ((img_label > 0)*255).astype('uint8')
+                            img_label = ((img_label >= 0.5)*255).astype('uint8')
 
                             # binary는 jpg로 저장하면 0, 255가 아니고 불러왔을 때 {0, 1, 2, 3, 4, 5, 250, 251, 252, 253, 254, 255} 값이 나옴
                             # png는 0, 255 값을 보존하고 오히려 jpg로 저장했을 때보다 용량이 적게 차지 (통상적으로 png가 jpg보다 용량이 큼)
@@ -251,26 +257,31 @@ if __name__ == "__main__":
 
     args = parse_arguments()
     # issues = [7, 17, 25, 33, 39, 42, 43, 48, 53, 55, 69, 87, 89, 91, 92, 98, 102, 104, 112]
-    # issues = [118]
-    # slide_list = sorted([svs for svs in os.listdir(args.slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
+    issues = [118]
+    slide_list = sorted([svs for svs in os.listdir(args.slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
 
-    target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107] # 1차 annotation
-    # target_slides = [80]
-    slide_list = sorted([svs for svs in os.listdir(args.slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
+    
+    # target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107] # 1차 annotation
+    # # target_slides = [80]
+    # slide_list = sorted([svs for svs in os.listdir(args.slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
+
+    print(slide_list)
 
     total_time = 0
     for i, (slide_file) in enumerate(slide_list):
         print(slide_file[:-4])
+
+        slide_name = slide_file[:-4]
+        ROI_file, label_file = None, None
+        if os.path.isfile(os.path.join(args.ROI_dir, f'{slide_name}.xml')):
+            ROI_file = f'{slide_name}.xml'
+        if os.path.isfile(os.path.join(args.label_dir, f'{slide_name}.xml')):
+            label_file = f'{slide_name}.xml'
+
+        print("ROI_file:", ROI_file, "label_file:", label_file)
+
         for target_mag in args.patch_mag:
             start_time = time.time()
-            slide_name = slide_file[:-4]
-
-            ROI_file, label_file = None, None
-            if os.path.isfile(args.ROI_dir + f'/{slide_name}.xml'):
-                ROI_file = f'/{slide_name}.xml'
-            if os.path.isfile(args.label_dir + f'/{slide_name}.xml'):
-                label_file = f'/{slide_name}.xml'
-
             generate_patch(args, slide_file, ROI_file, label_file, target_mag)
             end_time = time.time()
             taken = end_time - start_time

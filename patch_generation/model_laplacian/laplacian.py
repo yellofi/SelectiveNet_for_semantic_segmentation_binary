@@ -14,7 +14,7 @@ class Laplacian(torch.nn.Module):
         self.padding = nn.ReflectionPad2d(1)
 
     def forward(self, x):
-        self.conv_filter = self.conv_filter.cuda()
+        # self.conv_filter = self.conv_filter.cuda()
         output = self.padding(x)
         output = F.conv2d(output, self.conv_filter, padding=0)
         return output
