@@ -108,9 +108,13 @@ def net_test_load(ckpt_dir, net, epoch = 0, device = torch.device('cuda:0')):
     return net
 
 def sigmoid(z):
-    return 1/(1+np.e**(-z))
+    return 1/(1+np.e**(-(z.astype('float64')-0.5)))
 
 def make_heatmap(output):
+    # output = output-output.min()
+    # output = output/output.max()
+
+    # output = np.clip(output, 0, 1).astype('float32')
     output = sigmoid(output)
     heatmap = cm.jet(output)[:, :, :3]
     return heatmap.astype('float32')
@@ -131,15 +135,17 @@ if __name__ == '__main__':
     torch.cuda.set_device(rank)
     device = torch.device(f'cuda:{rank}')
 
-    model_select = []
+    
+  
+    k_fold = 5
+    model_select = [-1 for _ in range(k_fold)]
 
     model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/01_5-f_cv_baseline'
     model_select = [207, 208, 263, 290, 285] 
 
     # model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/05_5-f_cv_GH'
     # model_select = [124, 114, 132, 103, 107] # 200 epoch
-  
-    k_fold = 5
+
     nets = []
 
     for i in range(k_fold):
@@ -148,12 +154,8 @@ if __name__ == '__main__':
         ckpt_dir = f'{model_dir}/{i+1}-fold/checkpoint'
 
         net = UNet(input_type).to(device)
-        # print(net)
-        
-        if len(model_select) == k_fold:
-            net = net_test_load(ckpt_dir = ckpt_dir, net = net, epoch = model_select[i], device=device)
-        else: 
-            net = net_test_load(ckpt_dir = ckpt_dir, net = net, epoch = 0, device=device)
+
+        net = net_test_load(ckpt_dir = ckpt_dir, net = net, epoch = model_select[i], device=device)
 
         nets.append(net)
 

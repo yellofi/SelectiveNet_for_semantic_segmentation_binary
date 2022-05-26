@@ -110,13 +110,14 @@ def net_test_load(model_path, net, device=None):
     return net
 
 def sigmoid(z):
-    return 1/(1+np.e**(-z))
+    return 1/(1+np.e**(-(z-0.5)))
 
 def make_heatmap(output):
     # output = output-output.min()
     # output = output/output.max()
 
     output = sigmoid(output)
+    # output = np.clip(output, 0, 1).astype('float32')
     heatmap = cm.jet(output)[:, :, :3]
     return heatmap.astype('float32')
 
@@ -138,11 +139,10 @@ if __name__ == '__main__':
         net = net.to(device)
     else:
         # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
-        device = torch.device(f'cuda:{rank}')
+        device = torch.device(f'cuda:{rank[0]}')
         net = UNet(input_type).to(device)
         net = net_test_load(model_path, net, device=device) 
-        torch.cuda.set_device(rank)
-        device = torch.device(f'cuda:{rank}')
+        torch.cuda.set_device(rank[0])
 
     patch_dir = args.patch_dir
     
