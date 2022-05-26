@@ -176,7 +176,7 @@ class SamsungDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
  
-        assert len(self.input_list) == len(self.label_list), f'# of images {len(self.img_list)}, # of labels {len(self.label_list)}' 
+        assert len(self.input_list) == len(self.label_list), f'# of images {len(self.input_list)}, # of labels {len(self.label_list)}' 
         assert self.input_list[index].split('MET')[0] == self.label_list[index].split('MET')[0], f'image {self.input_list[index]}, label {self.label_list[index]}'
 
         parent_dir = self.input_list[index].split('MET')[0] + 'MET'
@@ -203,7 +203,10 @@ class SamsungDataset(torch.utils.data.Dataset):
         if input.ndim == 2:
             input = input[:, :, np.newaxis]
 
-        data = {'input': input, 'label': label}
+        data = {}
+        data['id'] = self.input_list[index]
+        data['input'] = input
+        data['label'] = label 
 
         if self.transform:
             data = self.transform(data)
