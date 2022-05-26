@@ -53,7 +53,7 @@ class UNet(nn.Module):
     def __init__(self, input_type = 'RGB', DataParallel = False):
         super(UNet, self).__init__()
 
-        if input_type == 'RGB':
+        if 'RGB' in input_type:
             input_ch = 3
         elif input_type == 'GH':
             input_ch = 2

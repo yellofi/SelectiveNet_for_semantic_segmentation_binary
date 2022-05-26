@@ -8,24 +8,37 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms
 
 """
-input as Gray + Hematoxylin
+input transformation
 """
-def RGB2GH(image):
+def RGB2GH(rgb_image):
     """
     Arg:
-        image = RGB image with 3 channels [r, g, b], 0 ~ 1 of scale, dtype = np.float32
+        rgb_image = An Original RGB image, {0, 1}, dtype = np.float32
 
     Return:
-        gh = GH image with 2 channels [g, h], 0 ~ 1 of scale, dtype = np.float32
+        gh = GH image with 2 channels [g, h], {0, 1}, dtype = np.float32
     """
-    g = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) 
-    h = skimage.color.separate_stains(image, skimage.color.hed_from_rgb)[:, :, 0]
+    g = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2GRAY) 
+    h = skimage.color.separate_stains(rgb_image, skimage.color.hed_from_rgb)[:, :, 0]
     h_min,  h_max = -0.66781543,  1.87798274 
     h = (h - h_min)/(h_max-h_min)
     # h = (h- h.min())/(h.max()-h.min()).astype('float32')
     gh = np.concatenate((g[:, :, np.newaxis], h[:, :, np.newaxis]), axis = -1)
     return gh.astype('float32')
-        
+
+def H_RGB(rgb_image):
+    """
+    Arg:
+        rgb_image = An Original RGB image, {0, 1}, dtype = np.float32
+
+    Return:
+        ihc_h = A RGB image of Hematoxyling to the corresponding original rgb image, {0, 1}, dtype = np.float32
+    """
+
+    h = skimage.color.separate_stains(rgb_image, skimage.color.hed_from_rgb)[:, :, 0]
+    null = np.zeros_like(h)
+    ihc_h = skimage.color.combine_stains(np.stack((h, null, null), axis = -1), skimage.color.rgb_from_hed)
+    return ihc_h.astype('float32')
 
 # define custom torch dataset for torch dataloader
 
@@ -70,6 +83,9 @@ class Dataset(torch.utils.data.Dataset):
 
             if self.input_type == 'GH':
                 input = RGB2GH(input)
+
+            if self.input_type == 'H_RGB':
+                input = H_RGB(input)
 
             if label.ndim == 2:
                 label = label[:, :, np.newaxis]
@@ -178,6 +194,9 @@ class SamsungDataset(torch.utils.data.Dataset):
 
         if self.input_type == 'GH':
             input = RGB2GH(input)
+
+        if self.input_type == 'H_RGB':
+            input = H_RGB(input)
 
         if label.ndim == 2:
             label = label[:, :, np.newaxis]
