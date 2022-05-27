@@ -20,8 +20,11 @@ def parse_arguments():
     parser.add_argument('--save_dir', action="store", type=str,
                         default='/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/1-fold/output', help='directory where results would be saved')
 
+    parser.add_argument('--patch_mag', type=int, default = 200)
+    parser.add_argument('--patch_size', type=int, default = 1024)
+
     parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local rank')
-    
+
     parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--batch_size', type=int, default=1)
 
@@ -38,7 +41,7 @@ class Dataset(torch.utils.data.Dataset):
         self.transform = transform
         self.input_type = input_type
 
-        img_list = sorted(os.listdir(self.data_dir))
+        img_list = sorted([i for i in os.listdir(self.data_dir) if 'input' in i])
 
         self.img_list = img_list
 
@@ -65,7 +68,7 @@ class Dataset(torch.utils.data.Dataset):
         if input.ndim == 2:
             input = input[:, :, np.newaxis]
 
-        data['id'] = self.img_list[index]
+        data['id'] = self.img_list[index].split('_input')[0]
         data['input'] = input
         # data = {'id': self.img_list[index],  'input': input}
 
@@ -97,20 +100,19 @@ class Normalization(object):
 def net_test_load(model_path, net, device=None):
     if device != None:
         dict_model = torch.load(model_path, map_location=device)
-        net.load_state_dict(dict_model['net'])
     else:
         dict_model = torch.load(model_path, map_location='cpu')
-        net_state_dict_ = OrderedDict()
-        for k, v in dict_model['net'].items():
-            name  = k.replace("module.", "")
-            net_state_dict_[name] = v
-        net.load_state_dict(net_state_dict_)
 
-    print('model: ', model_path)
+    k = list(dict_model['net'].keys())[0]
+    if "module" in k:
+        dict_model['net'] = remove_module(dict_model)
+    net.load_state_dict(dict_model['net'])
+
+    print('     model: ', model_path)
     return net
 
 def sigmoid(z):
-    return 1/(1+np.e**(-(z-0.5)))
+    return 1/(1+np.e**(-(z.astype('float64')-0.5)))
 
 def make_heatmap(output):
     # output = output-output.min()
@@ -145,8 +147,14 @@ if __name__ == '__main__':
         torch.cuda.set_device(rank[0])
 
     patch_dir = args.patch_dir
+    patch_mag = args.patch_mag
+    patch_size = args.patch_size
     
-    slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f))])
+    target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
+    
+    slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f)) and int(f.split('-')[1][2:]) in target_slides])
+
+    # slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f))])
 
     print('Inference...')
 
@@ -163,12 +171,12 @@ if __name__ == '__main__':
     for slide_id in slide_list:
         
         start_time = time.time()
-        data_dir = os.path.join(patch_dir, slide_id, '200x')
-        mask_save_dir = f'{save_dir}/slide/{slide_id}'
+        data_dir = os.path.join(patch_dir, slide_id, f'{patch_mag}x_{patch_size}')
+        # mask_save_dir = f'{save_dir}/slide/{slide_id}'
         # plot_save_dir = mask_save_dir + '/plot'
 
-        try: os.makedirs(mask_save_dir)
-        except: pass
+        # try: os.makedirs(mask_save_dir)
+        # except: pass
         
         transform = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
         dataset = Dataset(data_dir, transform, input_type)
@@ -186,8 +194,10 @@ if __name__ == '__main__':
                 img_id = data['id']
                 output = net(input)
 
+                # pred = np.squeeze(fn_tonumpy(fn_classifier(output)), axis=-1)
                 output = np.squeeze(fn_tonumpy(output), axis=-1)
-                pred = fn_classifier(output).astype('float32')
+                pred = fn_classifier(output)
+                # pred = fn_classifier(output).astype('float32')
 
                 if input_type == 'GH':
                     input = img.to('cpu').detach().numpy()
@@ -198,11 +208,11 @@ if __name__ == '__main__':
   
                     heatmap = make_heatmap(output_)
                     overlay = cv2.addWeighted(img_, 0.7, heatmap, 0.3, 0)
-                    overlay = Image.fromarray(np.uint8(overlay*255))
-                    overlay.save(f'{mask_save_dir}/{img_id_[:-4]}_heatmap_overlay.jpg')
+                    overlay = Image.fromarray(np.uint8(overlay*255)).convert('RGB')
+                    overlay.save(f'{data_dir}/{img_id_}_06_baseline_heatmap.jpg')
 
-                    pred_ = Image.fromarray(np.uint8(pred_*255))
-                    pred_.save(f'{mask_save_dir}/{img_id_[:-4]}_predicted_tumor_region.png')
+                    pred_ = Image.fromarray(np.uint8(pred_*255)).convert('L')
+                    pred_.save(f'{data_dir}/{img_id_}_06_baseline_prediction.png')
         
 
         taken = time.time() - start_time

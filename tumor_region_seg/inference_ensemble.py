@@ -36,7 +36,7 @@ class Dataset(torch.utils.data.Dataset):
         self.transform = transform
         self.input_type = input_type
 
-        img_list = sorted(os.listdir(self.data_dir))
+        img_list = sorted([i for i in os.listdir(self.data_dir) if 'input' in i])
 
         self.img_list = img_list
 
@@ -63,7 +63,7 @@ class Dataset(torch.utils.data.Dataset):
         if input.ndim == 2:
             input = input[:, :, np.newaxis]
 
-        data['id'] = self.img_list[index]
+        data['id'] = self.img_list[index].split('_input')[0]
         data['input'] = input
         # data = {'id': self.img_list[index],  'input': input}
 
@@ -92,19 +92,37 @@ class Normalization(object):
         data['input'] = input
         return data
 
-def net_test_load(ckpt_dir, net, epoch = 0, device = torch.device('cuda:0')):
-    if not os.path.exists(ckpt_dir): # 저장된 네트워크가 없다면 인풋을 그대로 반환
-        epoch = 0
-        return net
+# def net_test_load(ckpt_dir, net, epoch = 0, device = torch.device('cuda:0')):
+#     if not os.path.exists(ckpt_dir): # 저장된 네트워크가 없다면 인풋을 그대로 반환
+#         epoch = 0
+#         return net
     
+#     ckpt_lst = os.listdir(ckpt_dir) # ckpt_dir 아래 있는 모든 파일 리스트를 받아온다
+#     ckpt_lst.sort(key = lambda f : int(''.join(filter(str.isdigit,f))))
+
+#     print(f'{ckpt_lst[epoch-1]}')
+#     dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[epoch-1]), map_location=device)
+    
+#     net.load_state_dict(dict_model['net'])
+
+#     return net
+
+def net_test_load(model_path, net, epoch = 0, device = None):
+
     ckpt_lst = os.listdir(ckpt_dir) # ckpt_dir 아래 있는 모든 파일 리스트를 받아온다
     ckpt_lst.sort(key = lambda f : int(''.join(filter(str.isdigit,f))))
 
-    print(f'{ckpt_lst[epoch-1]}')
-    dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[epoch-1]), map_location=device)
-    
+    if device != None:
+        dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[epoch-1]), map_location=device)
+    else:
+        dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[epoch-1]), map_location='cpu')
+
+    k = list(dict_model['net'].keys())[0]
+    if "module" in k:
+        dict_model['net'] = remove_module(dict_model)
     net.load_state_dict(dict_model['net'])
 
+    print('     model: ', model_path)
     return net
 
 def sigmoid(z):
@@ -136,7 +154,6 @@ if __name__ == '__main__':
     device = torch.device(f'cuda:{rank}')
 
     
-  
     k_fold = 5
     model_select = [-1 for _ in range(k_fold)]
 
@@ -153,11 +170,22 @@ if __name__ == '__main__':
  
         ckpt_dir = f'{model_dir}/{i+1}-fold/checkpoint'
 
-        net = UNet(input_type).to(device)
-
-        net = net_test_load(ckpt_dir = ckpt_dir, net = net, epoch = model_select[i], device=device)
+        if len(rank) != 1:
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            net = UNet(input_type, DataParallel=True)
+            net = net_test_load(ckpt_dir, net, epoch = model_select[i])
+            net = torch.nn.DataParallel(net, device_ids=rank)
+            net = net.to(device)
+        else:
+            # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
+            device = torch.device(f'cuda:{rank[0]}')
+            net = UNet(input_type).to(device)
+            net = net_test_load(ckpt_dir, net, epoch = model_select[i], device=device) 
 
         nets.append(net)
+
+    if len(rank) == 1:
+        torch.cuda.set_device(rank[0])
 
     slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f))])
 
