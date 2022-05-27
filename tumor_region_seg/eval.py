@@ -46,17 +46,17 @@ def parse_arguments():
 def net_test_load(model_path, net, device=None):
     if device != None:
         dict_model = torch.load(model_path, map_location=device)
-        net.load_state_dict(dict_model['net'])
     else:
         dict_model = torch.load(model_path, map_location='cpu')
-        net_state_dict_ = OrderedDict()
-        for k, v in dict_model['net'].items():
-            name  = k.replace("module.", "")
-            net_state_dict_[name] = v
-        net.load_state_dict(net_state_dict_)
+    
+    k = list(dict_model['net'].keys())[0]
+    if "module" in k:
+        dict_model['net'] = remove_module(dict_model)
+    net.load_state_dict(dict_model['net'])
 
     print('     model: ', model_path)
     return net
+
 
 def get_target_value_index(array, target_value):
     # index = set([i for i, v in enumerate(array) if v == target_value])
@@ -112,10 +112,11 @@ def make_heatmap(output):
 def save_performance_as_csv(save_dir: str, performance: np.array or list, csv_name: str):
 
     with open(f'{save_dir}/{csv_name}.csv', 'w', newline ='') as csvfile:
-        performance_writer = csv.writer(csvfile, delimiter = ' ', quotechar = '|', quoting=csv.QUOTE_MINIMAL)
+        performance_writer = csv.writer(csvfile, delimiter = '| ', quotechar = ' ', quoting=csv.QUOTE_ALL)
 
-        performance_writer.writerow(['accuracy', 'recall', 'precision', 'f1 score', 'AUC score'])
-        performance_writer.writerow([score for score in performance])
+        performance_writer.writerow('accuracy| recall| precision| f1 score| AUC score')
+        performance = list(map(str, performance)).join('| ')
+        performance_writer.writerow(performance)
 
 if __name__ == '__main__':
 
@@ -190,7 +191,8 @@ if __name__ == '__main__':
 
         print('test : Loss %.4f'%(np.mean(loss_arr)))
 
-    result_dir = os.path.join(args.save_dir, 'test_result')
+    save_dir = args.save_dir
+    result_dir = os.path.join(save_dir, 'model_pred')
     os.makedirs(result_dir, exist_ok = True)
 
     print("Measure Performance and Save results")
@@ -198,11 +200,9 @@ if __name__ == '__main__':
     patch_level_performance =  []
     for b, (ids, inputs, labels, outputs, preds) in tqdm(enumerate(results), total = len(results)):
         for j, (id, i, l, o, p) in enumerate(zip(ids, inputs, labels, outputs, preds)): 
-            
-            parent_dir = id.split('MET')[0] + 'MET'
             # save_dir = os.path.join(data_dir, 'patch', parent_dir, f'{patch_mag}x_{patch_size}')
 
-            save_dir = os.path.join(result_dir, parent_dir)
+            # save_dir = os.path.join(result_dir, slide_name)
 
             heatmap = make_heatmap(o)
             overlay = cv2.addWeighted(i, 0.7, heatmap, 0.3, 0)
@@ -210,12 +210,12 @@ if __name__ == '__main__':
             input = Image.fromarray(np.uint8(i*255)).convert('RGB')
             label = Image.fromarray(np.uint8(l*255)).convert('L')
             overlay = Image.fromarray(np.uint8(overlay*255)).convert('RGB')
-            pred = Image.fromarray(np.uint8(pred*255)).convert('L')
+            pred = Image.fromarray(np.uint8(p*255)).convert('L')
 
-            input.save(os.path.join(save_dir, f'{id[:-4]}_input.jpg'))
-            label.save(os.path.join(save_dir, f'{id[:-4]}_label.png'))
-            overlay.save(os.path.join(save_dir, f'{id[:-4]}_heatmap_overlay.jpg'))
-            pred.save(os.path.join(save_dir, f'{id[:-4]}_pred.png'))
+            input.save(os.path.join(result_dir, f'{id}_input.jpg'))
+            label.save(os.path.join(result_dir, f'{id}_label.png'))
+            overlay.save(os.path.join(result_dir, f'{id}_heatmap_overlay.jpg'))
+            pred.save(os.path.join(result_dir, f'{id}_pred.png'))
 
             patch_level_performance.append(get_performance(l, o, p))
 
