@@ -204,7 +204,7 @@ class SamsungDataset(torch.utils.data.Dataset):
             input = input[:, :, np.newaxis]
 
         data = {}
-        data['id'] = self.input_list[index]
+        data['id'] = self.input_list[index].split('_input')[0]
         data['input'] = input
         data['label'] = label 
 
