@@ -14,11 +14,13 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--patch_dir', type=str, 
-                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch_on_ROI/sobel+blurrity_check', help='patch directory')
+                        default='*/patch', help='patch directory')
     parser.add_argument('--model_path', type=str, 
-                        default='/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/1-fold/checkpoint/model_epoch159.pth', help='model path (*.pth)')
-    parser.add_argument('--save_dir', action="store", type=str,
-                        default='/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/1-fold/output', help='directory where results would be saved')
+                        default='*/model/model.pth', help='model path (*.pth)')
+    parser.add_argument('--model_name', type=str, default='0_baseline')
+
+    # parser.add_argument('--save_dir', action="store", type=str,
+    #                     default='/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/1-fold/output', help='directory where results would be saved')
 
     parser.add_argument('--patch_mag', type=int, default = 200)
     parser.add_argument('--patch_size', type=int, default = 1024)
@@ -131,6 +133,8 @@ if __name__ == '__main__':
 
     rank = args.local_rank
     model_path = args.model_path
+    model_path = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/06_baseline_samsung_data/1-fold/checkpoint/model_epoch197.pth'
+    model_path = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/06_baseline_samsung_data/1-fold/checkpoint/model_epoch403.pth'
     input_type = args.input_type
 
     if len(rank) != 1:
@@ -147,14 +151,14 @@ if __name__ == '__main__':
         torch.cuda.set_device(rank[0])
 
     patch_dir = args.patch_dir
+    patch_dir = '/mnt/ssd1/biomarker/c-met/data/LOGONE_AT2/patch'
     patch_mag = args.patch_mag
     patch_size = args.patch_size
     
-    target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
-    
-    slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f)) and int(f.split('-')[1][2:]) in target_slides])
+    # target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
+    # slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f)) and int(f.split('-')[1][2:]) in target_slides])
 
-    # slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f))])
+    slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f))])
 
     print('Inference...')
 
@@ -163,8 +167,11 @@ if __name__ == '__main__':
     fn_norm = lambda x : (x-x.min())/(x.max()-x.min())
     fn_classifier = lambda x : 1.0 * (x > 0.5)
 
-    save_dir = args.save_dir
+    # save_dir = args.save_dir
     batch_size = args.batch_size
+    model_name = args.model_name
+    # model_name = '06_baseline'
+    model_name = '06_baseline_403'
     
     total_time = 0
 
@@ -209,14 +216,14 @@ if __name__ == '__main__':
                     heatmap = make_heatmap(output_)
                     overlay = cv2.addWeighted(img_, 0.7, heatmap, 0.3, 0)
                     overlay = Image.fromarray(np.uint8(overlay*255)).convert('RGB')
-                    overlay.save(f'{data_dir}/{img_id_}_06_baseline_heatmap.jpg')
+                    overlay.save(f'{data_dir}/{img_id_}_{model_name}_heatmap.jpg')
 
                     pred_ = Image.fromarray(np.uint8(pred_*255)).convert('L')
-                    pred_.save(f'{data_dir}/{img_id_}_06_baseline_prediction.png')
+                    pred_.save(f'{data_dir}/{img_id_}_{model_name}_prediction.png')
         
 
         taken = time.time() - start_time
-        print(f'{slide_id} | #: {len(os.listdir(data_dir))} | time: {round(taken, 2)} sec')
+        print(f'{slide_id} | #: {len(dataset)} | time: {round(taken, 2)} sec')
         total_time += taken 
 
     print(f'total time: {round(total_time, 2)} sec')

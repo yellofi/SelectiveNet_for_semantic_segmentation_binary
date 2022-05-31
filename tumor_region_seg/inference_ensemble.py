@@ -14,11 +14,16 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--patch_dir', type=str, 
-                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch_on_ROI/sobel+blurrity_check', help='patch directory')
+                        default='*/patch', help='patch directory')
     parser.add_argument('--model_dir', type=str, 
                         default='./model', help='model directory (5 models corresponing to each fold)')
 
-    parser.add_argument('--local_rank', type=int, default=7 , help='local rank (gpu idx)')
+    parser.add_argument('--model_name', type=str, default='0_baseline')
+
+    parser.add_argument('--patch_mag', type=int, default = 200)
+    parser.add_argument('--patch_size', type=int, default = 1024)
+
+    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local rank')
     
     parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--batch_size', type=int, default=1)
@@ -107,9 +112,9 @@ class Normalization(object):
 
 #     return net
 
-def net_test_load(model_path, net, epoch = 0, device = None):
+def net_test_load(model_dir, net, epoch = 0, device = None):
 
-    ckpt_lst = os.listdir(ckpt_dir) # ckpt_dir 아래 있는 모든 파일 리스트를 받아온다
+    ckpt_lst = [i for i in os.listdir(ckpt_dir) if 'pth' in i] # ckpt_dir 아래 있는 모든 파일 리스트를 받아온다
     ckpt_lst.sort(key = lambda f : int(''.join(filter(str.isdigit,f))))
 
     if device != None:
@@ -122,18 +127,18 @@ def net_test_load(model_path, net, epoch = 0, device = None):
         dict_model['net'] = remove_module(dict_model)
     net.load_state_dict(dict_model['net'])
 
-    print('     model: ', model_path)
+    print('model: ', os.path.join(model_dir, ckpt_lst[epoch-1]))
     return net
 
 def sigmoid(z):
-    return 1/(1+np.e**(-(z.astype('float64')-0.5)))
+    return 1/(1+np.e**(-(z-0.5)))
 
 def make_heatmap(output):
     # output = output-output.min()
     # output = output/output.max()
 
     # output = np.clip(output, 0, 1).astype('float32')
-    output = sigmoid(output)
+    # output = sigmoid(output)
     heatmap = cm.jet(output)[:, :, :3]
     return heatmap.astype('float32')
 
@@ -146,19 +151,18 @@ if __name__ == '__main__':
     
     rank = args.local_rank
     model_dir = args.model_dir
-    batch_size = args.batch_size
     input_type = args.input_type
-    patch_dir = args.patch_dir
     
-    torch.cuda.set_device(rank)
-    device = torch.device(f'cuda:{rank}')
+    # torch.cuda.set_device(rank)
+    # device = torch.device(f'cuda:{rank}')
 
-    
     k_fold = 5
-    model_select = [-1 for _ in range(k_fold)]
+    model_select = [0 for _ in range(k_fold)]
 
-    model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/01_5-f_cv_baseline'
-    model_select = [207, 208, 263, 290, 285] 
+    # model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/01_5-f_cv_baseline'
+     # model_select = [207, 208, 263, 290, 285] 
+    model_dir = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/01_5-f_cv_baseline'
+   
 
     # model_dir = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/05_5-f_cv_GH'
     # model_select = [124, 114, 132, 103, 107] # 200 epoch
@@ -168,7 +172,8 @@ if __name__ == '__main__':
     for i in range(k_fold):
         print(f'{i+1}-fold - ', end = '')
  
-        ckpt_dir = f'{model_dir}/{i+1}-fold/checkpoint'
+        # ckpt_dir = f'{model_dir}/{i+1}-fold/checkpoint'
+        ckpt_dir = f'{model_dir}/{i+1}-fold'
 
         if len(rank) != 1:
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -187,29 +192,43 @@ if __name__ == '__main__':
     if len(rank) == 1:
         torch.cuda.set_device(rank[0])
 
+    patch_dir = args.patch_dir
+    patch_dir = '/mnt/ssd1/biomarker/c-met/data/LOGONE_AT2/patch'
+    patch_mag = args.patch_mag
+    patch_size = args.patch_size
+
     slide_list = sorted([f for f in os.listdir(patch_dir) if os.path.isdir(os.path.join(patch_dir, f))])
+
+    print('Inference...')
 
     fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
     fn_denorm = lambda x, mean, std : (x*std) + mean
-    fn_norm = lambda x : (x-x.min())/(x.max()-x.min())
+
+    # ensemble 
+    fn_scale_minmax = lambda x : (x-x.min())/(x.max()-x.min())
+    fn_sigmoid = lambda x : 1/(1+ np.exp(-(x.astype('float64')-0.5)))
+    
     fn_classifier = lambda x : 1.0 * (x > 0.5)
     
-    print('Inference...')
+    batch_size = args.batch_size
+    model_name = args.model_name
+    model_name = '0_sample_NT_add_ens'
 
     total_time = 0
     for slide_id in slide_list:
         
         start_time = time.time()
-        data_dir = os.path.join(patch_dir, slide_id, '200x')
-        mask_save_dir = f'{model_dir}/output/slide/{slide_id}'
+        data_dir = os.path.join(patch_dir, slide_id, f'{patch_mag}x_{patch_size}')
+        # data_dir = os.path.join(patch_dir, slide_id, '200x')
+        # mask_save_dir = f'{model_dir}/output/slide/{slide_id}'
 
-        try: os.makedirs(mask_save_dir)
-        except: pass
+        # try: os.makedirs(mask_save_dir)
+        # except: pass
         
         transform = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
         # dataset = Dataset(data_dir=data_dir, transform = transform)
         dataset = Dataset(data_dir, transform, input_type)
-        loader = DataLoader(dataset, batch_size = batch_size, shuffle=False)
+        loader = DataLoader(dataset, batch_size, shuffle=False)
 
         results = []
         with torch.no_grad(): 
@@ -226,7 +245,7 @@ if __name__ == '__main__':
                 outputs = []
                 for net in nets:
                     output = net(input)
-                    outputs.append(np.squeeze(fn_tonumpy(fn_norm(output)), axis=-1))
+                    outputs.append(np.squeeze(fn_tonumpy(fn_scale_minmax(output)), axis=-1))
                     # outputs.append(np.squeeze(fn_tonumpy(output), axis=-1))
 
                 if input_type == 'GH':
@@ -242,11 +261,11 @@ if __name__ == '__main__':
   
                     heatmap = make_heatmap(output_)
                     overlay = cv2.addWeighted(img_, 0.7, heatmap, 0.3, 0)
-                    overlay = Image.fromarray(np.uint8(overlay*255))
-                    overlay.save(f'{mask_save_dir}/{img_id_[:-4]}_heatmap_overlay.jpg')
+                    overlay = Image.fromarray(np.uint8(overlay*255)).convert('RGB')
+                    overlay.save(f'{data_dir}/{img_id_}_{model_name}_heatmap.jpg')
 
-                    pred_ = Image.fromarray(np.uint8(pred_*255))
-                    pred_.save(f'{mask_save_dir}/{img_id_[:-4]}_predicted_tumor_region.png')
+                    pred_ = Image.fromarray(np.uint8(pred_*255)).convert('L')
+                    pred_.save(f'{data_dir}/{img_id_}_{model_name}_prediction.png')
 
         taken = time.time() - start_time
         print(f'{slide_id} | #: {len(os.listdir(data_dir))} | time: {round(taken, 2)} sec')
