@@ -57,7 +57,6 @@ def net_test_load(model_path, net, device=None):
     print('     model: ', model_path)
     return net
 
-
 def get_target_value_index(array, target_value):
     # index = set([i for i, v in enumerate(array) if v == target_value])
     index = np.where(array == target_value)[0]
@@ -143,6 +142,9 @@ if __name__ == '__main__':
 
     print("Load Model...")
     
+    fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
+    fn_denorm = lambda x, mean, std : (x*std) + mean
+    fn_classifier = lambda x : 1.0 * (x > 0.5)
 
     if len(rank) != 1:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -156,15 +158,10 @@ if __name__ == '__main__':
         net = UNet(input_type).to(device)
         net = net_test_load(model_path, net, device=device) 
         torch.cuda.set_device(rank[0])
-
+        
     batch_size = args.batch_size # number of samples in an WSI (or a source image)
     loader = DataLoader(dataset, batch_size = batch_size, shuffle=False)
-
-    fn_loss = nn.BCEWithLogitsLoss().to(device)
-    fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
-    fn_denorm = lambda x, mean, std : (x*std) + mean
-    fn_classifier = lambda x : 1.0 * (x > 0.5)
-
+    
     print("Model Inference...")
     results = []
     with torch.no_grad(): 
@@ -177,10 +174,6 @@ if __name__ == '__main__':
             labels = data['label'].to(device)
             inputs = data['input'].to(device)
             outputs = net(inputs)
-
-            # loss 
-            loss = fn_loss(outputs,labels)
-            loss_arr += [loss.item()]
             
             ids = data['id']
             inputs = fn_tonumpy(fn_denorm(inputs, mean=0.5, std=0.5))
@@ -188,8 +181,6 @@ if __name__ == '__main__':
             preds = np.squeeze(fn_tonumpy(fn_classifier(outputs)), axis=-1)
             probs = np.squeeze(fn_tonumpy(outputs), axis=-1)
             results.append((ids, inputs, labels, probs, preds))
-
-        print('test : Loss %.4f'%(np.mean(loss_arr)))
 
     save_dir = args.save_dir
     result_dir = os.path.join(save_dir, 'model_pred')
