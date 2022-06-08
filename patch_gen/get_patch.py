@@ -146,8 +146,8 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
     mpp_ratio = slide_mag//target_mag
 
     total_point = []
-    for i in range(sliding_window * width//(patch_size*mpp_ratio)):
-        for j in range(sliding_window * height//(patch_size*mpp_ratio)):
+    for i in range(width//(patch_size*sliding_window*mpp_ratio)):
+        for j in range(height//(patch_size*sliding_window*mpp_ratio)):
             total_point.append((i, j))
     
     # shuffle(total_point)
