@@ -17,10 +17,10 @@ def net_save(ckpt_dir,net,optim,epoch):
     torch.save({'net':net.state_dict(),'optim':optim.state_dict()},'%s/model_epoch%d.pth'%(ckpt_dir,epoch))
 
 # 네트워크 불러오기
-def remove_module(dict_model):
+def remove_module(ckpt):
     net_state_dict = OrderedDict()
-    for k, v in dict_model['net'].items():
-        name  = k.replace("module.", "")
+    for k, v in ckpt['net'].items():
+        name = k.replace("module.", "")
         net_state_dict[name] = v
     return net_state_dict
 
@@ -35,21 +35,20 @@ def net_load(ckpt_dir, net, optim, device=None):
     print('model: ', ckpt_lst[-1])
 
     if device != None:
-        dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location=device)
+        ckpt = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location=device)
     else:
-        dict_model = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location='cpu')
+        ckpt = torch.load('%s/%s' % (ckpt_dir,ckpt_lst[-1]), map_location='cpu')
 
-    k = list(dict_model['net'].keys())[0]
-    if "module" in k:
-        dict_model['net'] = remove_module(dict_model)
-    net.load_state_dict(dict_model['net'])
+    try: ckpt['net'] = remove_module(ckpt)
+    except: pass
+
+    net.load_state_dict(ckpt['net'])
   
-    # net.load_state_dict(dict_model['net'])
-    optim.load_state_dict(dict_model['optim'])
+    # net.load_state_dict(ckpt['net'])
+    optim.load_state_dict(ckpt['optim'])
     epoch = int(ckpt_lst[-1].split('epoch')[1].split('.pth')[0])
 
     return net,optim,epoch
-
 
 """
 Networks
