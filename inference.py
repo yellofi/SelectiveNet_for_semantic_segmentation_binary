@@ -1,15 +1,17 @@
 import argparse
 import os
 import time
+from tqdm import tqdm
 import numpy as np
 from openslide import OpenSlide
 from PIL import Image
 import cv2
 
 from patch_gen.slide_utils import *
-from tumor_region_seg.Dataset_inference import *
+from tumor_seg.Dataset_inference import *
+from tumor_seg.model import *
+
 from torch.utils.data import DataLoader
-from tumor_region_seg.model import *
 import torch.backends.cudnn as cudnn
 
 import xml.etree.ElementTree as ET
@@ -31,28 +33,37 @@ def parse_arguments():
     parser.add_argument('--ROI_dir', action="store", type=str,
                         default='*/ROI_annotation/annotation', help='rough tissue region annotation (.xml) directory')
 
-    parser.add_argument('--model_path', type=str, 
-                        default='*/model/model.pth', help='model path (*.pth)')
-    parser.add_argument('--model_name', type=str, default='0_baseline')
-
-    parser.add_argument('--save_dir', action="store", type=str,
-                        default='/mnt/ssd1/biomarker/c-met/final_output', help='directory where it will save patches')
-
     parser.add_argument('--tissue_mask_type', action="store", type=str,
                         default='sobel', choices=['otsu', 'sobel'])
-
     parser.add_argument('--patch_mag', action="store", type=int,
                         default=200, help='target magnifications of generated patches')
     parser.add_argument('--patch_size', action="store", type=int,
                         default=1024, help='a width/height length of squared patches')
     parser.add_argument('--patch_stride', action="store", type=int,
                         default=1024, help='window size from current patch to next patch')
-
-    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local gpu ids')
+    parser.add_argument('--patch_grid_save', action="store", type=bool,
+                        default=False, help='Whether grid visualization of patches will be saved')
 
     parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--num_workers', type=int, default=24, help='Dataloader num_workers')
+    parser.add_argument('--num_workers', type=int, default=16, help='Dataloader num_workers')
+
+    # parser.add_argument('--model_path', type=str, 
+    #                     default='*/model/model.pth', help='model path (*.pth)')
+    
+    parser.add_argument('--model_dir', type=str, 
+                        default='*/model', help='network ckpt (.pth) directory')
+    parser.add_argument('--model_arch', type=str, nargs = '+',
+                        default = ['UNet'], choices=['UNet'])
+    parser.add_argument('--ens_scale', type=str,
+                        default = 'None', choices=['None', 'clip', 'sigmoid', 'minmax'])
+                
+    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local gpu ids')
+
+    parser.add_argument('--save_dir', action="store", type=str,
+                        default='/mnt/ssd1/biomarker/c-met/final_output')
+
+    
 
     args = parser.parse_args()
     print('')
@@ -104,8 +115,8 @@ def make_wsi_mask_(slide, level, slide_patch_ratio, slide_mask_ratio, pred_dir):
 
     mask = mask.astype('uint8')
     
-    # kernel_size = 61
-    kernel_size = 15
+    kernel_size = 61
+    # kernel_size = 15
     mask = cv2.medianBlur(mask, kernel_size)
 
     return mask
@@ -137,12 +148,14 @@ def make_wsi_mask(slide, level, patch_size, slide_patch_ratio, slide_mask_ratio,
         except: pass
 
     mask = mask.astype('uint8')
-    
+    # return mask, cv2.medianBlur(mask, 15), cv2.medianBlur(mask, 61)
+
     kernel_size = 61
     # kernel_size = 15
     mask = cv2.medianBlur(mask, kernel_size)
 
     return mask
+    
 
 def make_wsi_xml(mask, slide_mask_ratio, color = "-65536", ano_class = "Pattern5"):
 
@@ -249,6 +262,8 @@ def main(args, slide_path, ROI_path):
         end_time = time.time()
         ROI_mask_time += (end_time - start_time)
         total_time += ROI_mask_time
+    else:
+        print(f'    Region of Interest file {ROI_path} does not exist')
 
         # print(f'ROI Mask Time: {round(ROI_mask_time, 2)} sec')
 
@@ -272,10 +287,10 @@ def main(args, slide_path, ROI_path):
     print(f'    Tissue Mask Time: {round(tissue_mask_time, 2)} sec')
 
     """
-    Dataloader
+    Coordinates, Dataset and Dataloader
     """
 
-    print("Define Dataloader...")
+    print("Coordinates, Dataset and Dataloader...")
 
     patch_mag = args.patch_mag
     patch_size = args.patch_size
@@ -294,8 +309,21 @@ def main(args, slide_path, ROI_path):
     y_coord = list(np.where(tissue_mask > 0)[0])
     x_coord = list(np.where(tissue_mask > 0)[1])
     xy_coord = [(int(x_coord[i]*step_on_slide), int(y_coord[i]*step_on_slide)) for i in range(len(x_coord))]
+    
+    if args.patch_grid_save:
+        slide_ = slide.get_thumbnail(slide.level_dimensions[-1]).convert('RGB')
+        slide_ = cv2.cvtColor(np.array(slide_, dtype = np.uint8), cv2.COLOR_RGB2BGR)
 
-    test_set = Dataset(args=args, slide=slide, xy_coord=xy_coord, slide_patch_ratio = slide_patch_ratio)
+        for (x, y) in xy_coord:
+            mask_x, mask_y = x//slide_mask_ratio, y//slide_mask_ratio
+            mask_step = step_on_slide//slide_mask_ratio
+            slide_ = cv2.rectangle(slide_, 
+            (mask_x, mask_y), (mask_x+mask_step, mask_y+mask_step), 
+            color=(0, 255, 0), thickness=2)
+        
+        cv2.imwrite(os.path.join(save_dir, f'{slide_name}_x{patch_mag}_{patch_size}_num-{len(xy_coord)}.jpg'), slide_)
+
+    test_set = Dataset(slide=slide, xy_coord=xy_coord, size_on_slide = size_on_slide, patch_size = patch_size)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True, drop_last=False)
 
     end_time = time.time()
@@ -308,11 +336,9 @@ def main(args, slide_path, ROI_path):
     print(f'    patch stride: {patch_stride}')
     print(f'    slide/patch ratio: {slide_patch_ratio}') 
     print(f'    # of patch: {len(xy_coord)}')
+    print(f'    batch size: {args.batch_size}')
+    print(f'    num workers: {args.num_workers}')
     print(f'    Slide Loader Time: {round(slide_loader_time, 2)} sec')
-
-    # for i, (input, x, y) in enumerate(test_loader):
-    #     print(i, type(input), input.size(), x, y)
-
 
     """
     Load Tumor Segmentation Model
@@ -321,41 +347,55 @@ def main(args, slide_path, ROI_path):
     print("Load Tumor Segmentation Model...")
 
     rank = args.local_rank
-    model_path = args.model_path
-    # model_path = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/06_baseline_samsung_data/1-fold/checkpoint/model_epoch197.pth'
-    # model_path = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/06_baseline_samsung_data/1-fold/checkpoint/model_epoch403.pth'
+    model_dir = args.model_dir
     input_type = args.input_type
-
-    print(f'    model path: {model_path}')
-    print(f'    input type: {input_type}')
-    print(f'    local ranks: {rank}')
+    model_arch = args.model_arch # list
 
     load_model_time = 0
     start_time = time.time() 
 
-    if len(rank) != 1:
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        net = UNet(input_type)
-        net = net_test_load(model_path, net)
-        net = torch.nn.DataParallel(net, device_ids=rank)
-        net = net.to(device)
-    else:
-        # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
-        device = torch.device(f'cuda:{rank[0]}')
-        net = UNet(input_type).to(device)
-        net = net_test_load(model_path, net, device=device) 
+    model_list = sorted([ckpt for ckpt in os.listdir(model_dir) if 'pth' in ckpt])
+    
+    if len(model_list) != 1 and len(model_arch) == 1:
+        model_arch_ = model_arch[0]
+        model_arch = [model_arch_ for _ in range(len(model_list))]
+
+    model_dict = {'UNet': UNet}
+    nets = []
+
+    for i in range(len(model_list)):
+ 
+        model_path = os.path.join(model_dir, model_list[i])
+        print(f'    {model_path} - {model_arch[i]}')
+
+        if len(rank) != 1:
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+            net = model_dict[model_arch[i]](input_type)
+            net = net_test_load(model_path, net)
+            net = torch.nn.DataParallel(net, device_ids=rank)
+            net = net.to(device) 
+        else:
+            # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
+            device = torch.device(f'cuda:{rank[0]}')
+            net = model_dict[model_arch[i]](input_type).to(device)
+            net = net_test_load(model_path, net, device=device)
+            
+        net.train(False)
+        nets.append(net)
+
+    if len(rank) == 1:
         torch.cuda.set_device(rank[0])
 
     # cudnn.benchmark=True
-    # net.train(False)
-
-    print(f'    device: {device}')
     
     end_time = time.time()
 
     load_model_time += (end_time - start_time)
     total_time += load_model_time
 
+    print(f'    input type: {input_type}')
+    print(f'    local ranks: {rank}')
+    print(f'    device: {device}')
     print(f'    Load Model Time: {round(load_model_time, 2)} sec')
 
     """
@@ -369,34 +409,47 @@ def main(args, slide_path, ROI_path):
 
     fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
     fn_denorm = lambda x, mean, std : (x*std) + mean
-    fn_norm = lambda x : (x-x.min())/(x.max()-x.min())
+
+    # ensemble
+    ensemble_scale = args.ens_scale
+    fn_scale_minmax = lambda x : (x-x.min())/(x.max()-x.min())
+    fn_sigmoid = lambda x : 1/(1+ np.exp(-(x.astype('float64')-0.5)))
+    fn_clip = lambda x: np.clip(x, 0, 1)
+
     fn_classifier = lambda x : 1.0 * (x > 0.5)
 
     model_inf_time = 0
     start_time = time.time() 
 
     with torch.no_grad():
-        net.eval()
+        # net.eval()
 
-        for i, data in enumerate(test_loader):
+        for data in tqdm(test_loader, total = len(test_loader), desc = '   model inference'):
             input = data['input'].to(device)
-            # print(input.max(), input.min())
-            output = net(input)
-
             x, y = data['x'], data['y']
+            
+            if len(nets) == 1:
+                output = nets[0](input)
+                output = np.squeeze(fn_tonumpy(output), axis = -1)
+            else:
+                outputs = []
+                for net in nets:
+                    output = net(input)
+                    if ensemble_scale == 'None':
+                        outputs.append(np.squeeze(fn_tonumpy(output), axis = -1))
+                    elif ensemble_scale == 'clip':
+                        outputs.append(np.squeeze(fn_tonumpy(fn_clip(output)), axis = -1))
+                    elif ensemble_scale == 'minmax':
+                        outputs.append(np.squeeze(fn_tonumpy(fn_scale_minmax(output)), axis = -1))
+                    elif ensemble_scale == 'sigmoid':
+                        outputs.append(np.squeeze(fn_tonumpy(fn_sigmoid(output)), axis = -1))
+                output = np.mean(np.asarray(outputs), axis = 0)
+                del outputs
 
             # input = fn_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
-            output = np.squeeze(fn_tonumpy(output), axis=-1)
+            
             pred = fn_classifier(output)
-
             model_output.extend(np.uint8(pred*255))
-
-            # for (ii, pi, xi, yi) in zip(input, pred, x, y):
-            #     img = Image.fromarray(np.uint8(ii*255)).convert('RGB')
-            #     img.save(os.path.join(save_dir, f'{slide_name}_{xi}_{yi}_input.png'))
-
-            #     pred_ = Image.fromarray(np.uint8(pi*255)).convert('L')
-            #     pred_.save(os.path.join(save_dir, f'{slide_name}_{xi}_{yi}_pred.png'))
 
             """
             아마 여기서 input과 output(tumor mask)를 가지고 analyzer에 입력해야할 수 있음
@@ -413,7 +466,7 @@ def main(args, slide_path, ROI_path):
             del input, output, pred
             torch.cuda.empty_cache()
 
-            print(f'    batch - {i+1} / {len(test_loader)}')
+            # print(f'    batch - {i+1} / {len(test_loader)}')
         
     end_time = time.time()
 
@@ -434,73 +487,88 @@ def main(args, slide_path, ROI_path):
     start_time = time.time() 
 
     mask_level = 1
-    slide_mask_ratio = int(slide.level_downsamples[mask_level]) 
+    slide_mask_ratio = round(slide.level_downsamples[mask_level]) 
     # 위의 tissue mask에 대한 slide_mask_ratio는 32 or 64, 여기선 4.. 
 
     tumor_mask = make_wsi_mask(slide, mask_level, patch_size, slide_patch_ratio, slide_mask_ratio, pred_list = model_output, x_coord=x_coord, y_coord=y_coord)
+    # mask, mask_mb_15, mask_mb_61 = make_wsi_mask(slide, mask_level, patch_size, slide_patch_ratio, slide_mask_ratio, pred_list = model_output, x_coord=x_coord, y_coord=y_coord)
     end_time = time.time()
     wsi_mask_time += (end_time - start_time)
     total_time += wsi_mask_time
 
+    tumor_mask_ = cv2.resize(tumor_mask, slide.level_dimensions[-1], interpolation=cv2.INTER_AREA)
+
     print(f'    slide/tumor_mask ratio: {slide_mask_ratio}')
     print(f'    patch-level mask to WSI Mask Time: {round(wsi_mask_time, 2)} sec')
 
-    # cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask.png'), tumor_mask)
+    cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask.png'), tumor_mask_)
+    # cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask_median_blur_15.png'), mask_mb_15)
+    # cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask_median_blur_61.png'), mask_mb_61)
+    
 
     mask_xml_time = 0
     start_time = time.time() 
+
+    xml_save_dir = os.path.join(save_dir, 'xml')
+    os.makedirs(xml_save_dir, exist_ok = True)
+
     xml = make_wsi_xml(tumor_mask, slide_mask_ratio, color = tumor_color, ano_class = tumor_class)
-    ET.ElementTree(xml).write(os.path.join(save_dir, f'{slide_name}.xml'))
+    # xml_mb_15 = make_wsi_xml(mask_mb_15, slide_mask_ratio, color = tumor_color, ano_class = tumor_class)
+    ET.ElementTree(xml).write(os.path.join(xml_save_dir, f'{slide_name}.xml'))
+    # ET.ElementTree(xml).write(os.path.join(save_dir, 'xml', 'raw', f'{slide_name}.xml'))
+    # ET.ElementTree(xml_mb_15).write(os.path.join(save_dir, 'xml', 'mb_15', f'{slide_name}.xml'))
 
     end_time = time.time()
     mask_xml_time += (end_time - start_time)
     total_time += mask_xml_time
     print(f'    WSI Mask to Xml Time: {round(mask_xml_time, 2)} sec')
-
-    # print('')
-    print(f'    Total Time: {round(total_time, 2)} sec')
+    print(f'    Total Elapsed Time: {round(total_time, 0)}s')
+    m, s = divmod(total_time, 60)
+    print(f'    Total Elapsed Time: {m}m {round(s, 0)}s')
     print('')
+    
+    return total_time
 
 if __name__ == "__main__":
 
-
-    # signal.signal(signal.SIGINT, exit_gracefully)  # 인터럽트 발생시
-    # signal.signal(signal.SIGHUP, exit_gracefully)  # 터미널과의 연결이 끊겼을 시
-    # signal.signal(signal.SIGTERM, exit_gracefully)  # Soft Kill
-    
     args = parse_arguments()
 
     slide_dir = args.slide_dir
     save_dir = args.save_dir
     os.makedirs(save_dir, exist_ok=True)
-
+    
     if args.slide_name != None:
-
         slide_path = os.path.join(slide_dir, args.slide_name)    
         slide_name = args.slide_name[:-4]
+        print(slide_name)
         ROI_file = f'{slide_name}.xml'
         ROI_path = os.path.join(args.ROI_dir, ROI_file)
         main(args, slide_path, ROI_path)
-
     else:
-        issues = [1, 2, 3, 27, 118]
+        issues = [118]
         slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
         
         # target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
         # slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
 
+        total_time = 0
         for i, (slide_file) in enumerate(slide_list):
             print(slide_file[:-4])
-
             slide_path = os.path.join(slide_dir, slide_file)
             slide_name = slide_file[:-4]
             ROI_file = f'{slide_name}.xml'
             ROI_path = os.path.join(args.ROI_dir, ROI_file)
-
-            main(args, slide_path, ROI_path)
-
-
+            elsapsed_time = main(args, slide_path, ROI_path)
+            total_time += elsapsed_time
+        
+        print(slide_list)
+        print(f'    Total Elapsed Time: {round(total_time, 2)}s')
+        m, s = divmod(total_time, 60)
+        h, m = divmod(m, 60)
+        print(f'    Total Elapsed Time: {h}h {m}m {round(s, 2)}s')
     
 
-
+    signal.signal(signal.SIGINT, exit_gracefully)  # 인터럽트 발생시
+    signal.signal(signal.SIGHUP, exit_gracefully)  # 터미널과의 연결이 끊겼을 시
+    signal.signal(signal.SIGTERM, exit_gracefully)  # Soft Kill
     
