@@ -22,18 +22,18 @@ def parse_arguments():
     parser.add_argument('--slide_dir', action="store", type=str,
                         default='/mnt/nfs0/jycho/SLIDE_DATA/록원재단/AT2/C-MET_slide', help='WSI data (.svs) directory')
     parser.add_argument('--ROI_dir', action="store", type=str,
-                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/ROI_annotation', help='rough tissue region annotation (.xml) directory')
+                        default='/mnt/ssd1/biomarker/c-met/data/LOGONE_AT2/ROI_annotation/annotation', help='rough tissue region annotation (.xml) directory')
     parser.add_argument('--label_dir', action="store", type=str,
-                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/tumor_annotation/annotation', help='tumor annotation (.xml) directory')
+                        default='/mnt/ssd1/biomarker/c-met/data/LOGONE_AT2/tumor_annotation/annotation', help='tumor annotation (.xml) directory')
 
     parser.add_argument('--save_dir', action="store", type=str,
-                        default='/mnt/hdd1/c-MET_datasets/SLIDE_DATA/록원재단/AT2/C-MET_slide/patch', help='directory where it will save patches')
+                        default='/mnt/ssd1/biomarker/c-met/data/LOGONE_AT2/patch', help='directory where it will save patches')
 
     parser.add_argument('--tissue_mask_type', action="store", type=str,
-                        default='sobel', help="otsu, sobel, ...")
+                        default='sobel', help="the algrotihm for generating a tissue mask", choices= ['otsu', 'sobel'])
 
-    parser.add_argument('--patch_mag', action="store", nargs='+', type=int,
-                        default=[200], help='target magnifications of generated patches')
+    parser.add_argument('--patch_mag', action="store", type=int,
+                        default=200, help='target magnification of generated patches')
 
     parser.add_argument('--patch_size', action="store", type=int,
                         default=1024, help='a width/height length of squared patches')
@@ -226,7 +226,7 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
                         input_save_path = os.path.join(patch_save_dir, slide_name + '_' + str(_x)+'_'+str(_y)+'_input.jpg')
 
                         if not os.path.isfile(input_save_path):
-                            img.convert('RGB').save(input_save_path)
+                            img.convert('RGB').save(input_save_path, quality = 90) # default 75는 compression artifact가 생김 
                         slide_ = cv2.rectangle(slide_, (_x//slide_mask_ratio, _y//slide_mask_ratio), 
                         (_x//slide_mask_ratio+mask_step_size, _y//slide_mask_ratio+mask_step_size), color=(0, 255, 0), thickness=2)
 
@@ -234,13 +234,13 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
                             img_label = tumor_label[_y//slide_label_ratio:_y//slide_label_ratio+label_step_size, 
                                                         _x//slide_label_ratio:_x//slide_label_ratio+label_step_size]
 
-                            img_label = cv2.resize(img_label, (patch_size, patch_size))
+                            img_label = cv2.resize(img_label, (patch_size, patch_size), interpolation = cv2.INTER_AREA) # cv2.INTER_AREA가 downsampling에서 앨리어싱이 없음
                             img_label = ((img_label >= 0.5)*255).astype('uint8')
 
                             label_save_path = os.path.join(patch_save_dir, slide_name + '_' + str(_x)+'_'+str(_y)+'_label.png')
                         
-                            if not os.path.isfile(label_save_path):
-                                cv2.imwrite(label_save_path, img_label)
+                            # if not os.path.isfile(label_save_path):
+                            cv2.imwrite(label_save_path, img_label)
                             # binary는 jpg로 저장하면 0, 255가 아니고 불러왔을 때 {0, 1, 2, 3, 4, 5, 250, 251, 252, 253, 254, 255} 값이 나옴
                             # png는 0, 255 값을 보존하고 오히려 jpg로 저장했을 때보다 용량이 적게 차지 (통상적으로 png가 jpg보다 용량이 큼)
                         
@@ -265,7 +265,7 @@ if __name__ == "__main__":
 
     
     target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107] # 1차 annotation
-    # # target_slides = [80]
+    # target_slides = [80]
     slide_list = sorted([svs for svs in os.listdir(args.slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
 
     print(slide_list)
@@ -283,12 +283,14 @@ if __name__ == "__main__":
 
         print("ROI_file:", ROI_file, "label_file:", label_file)
 
-        for target_mag in args.patch_mag:
-            start_time = time.time()
-            generate_patch(args, slide_file, ROI_file, label_file, target_mag)
-            end_time = time.time()
-            taken = end_time - start_time
-            print(f'time: {round(taken, 2)} sec')
-            total_time += taken
-
-    print(f'total time: {round(total_time, 2)} sec')
+        start_time = time.time()
+        generate_patch(args, slide_file, ROI_file, label_file, args.patch_mag)
+        end_time = time.time()
+        taken = end_time - start_time
+        print(f'time: {round(taken, 2)} sec')
+        total_time += taken
+    
+    print(f'    Total Elapsed Time: {round(total_time, 2)}s')
+    m, s = divmod(total_time, 60)
+    h, m = divmod(m, 60)
+    print(f'    Total Elapsed Time: {h}h {m}m {round(s, 2)}s')
