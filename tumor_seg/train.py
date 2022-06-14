@@ -8,7 +8,10 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from data_utils import *
-from model import *
+from Dataset_sample import Dataset
+from Dataset_samsung import *
+from model import UNet
+from net_utils import *
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -34,21 +37,6 @@ def parse_arguments():
 
     return args
 
-def create_data_loader(data_dir, batch_size, input_type = 'RGB'): 
-
-    # transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), PartialNonTissue(), ToTensor()])
-    transform_train = transforms.Compose([Normalization(mean=0.5, std=0.5), RandomFlip(), ToTensor()])
-
-    dataset_train = Dataset(data_dir=os.path.join(data_dir,'train'),transform = transform_train, input_type = input_type)
-    loader_train = DataLoader(dataset_train, batch_size = batch_size, shuffle=True)
-
-    transform_val = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
-
-    dataset_val = Dataset(data_dir=os.path.join(data_dir, 'valid'), transform = transform_val, input_type = input_type)
-    loader_val = DataLoader(dataset_val, batch_size = batch_size, shuffle=True)
-
-    return loader_train, loader_val
-
 def train(rank, data_loader, lr, num_epoch, input_type):
 
     loader_train, loader_val = data_loader
@@ -60,7 +48,7 @@ def train(rank, data_loader, lr, num_epoch, input_type):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         net = UNet(input_type, DataParallel=True)
         optim = torch.optim.Adam(net.to(device).parameters(), lr = lr)
-        net, optim, start_epoch = net_load(ckpt_dir=ckpt_dir, net=net, optim=optim)
+        net, optim, start_epoch = net_train_load(ckpt_dir=ckpt_dir, net=net, optim=optim)
         net = torch.nn.DataParallel(net, device_ids=rank)
         net = net.to(device)
 
@@ -69,7 +57,7 @@ def train(rank, data_loader, lr, num_epoch, input_type):
         device = torch.device(f'cuda:{rank}')
         net = UNet(input_type).to(device)
         optim = torch.optim.Adam(net.parameters(), lr = lr)
-        net, optim, start_epoch = net_load(ckpt_dir=ckpt_dir, net=net, optim=optim, device=device) 
+        net, optim, start_epoch = net_train_load(ckpt_dir=ckpt_dir, net=net, optim=optim, device=device) 
   
     fn_loss = torch.nn.BCEWithLogitsLoss().to(device)
 
@@ -85,11 +73,9 @@ def train(rank, data_loader, lr, num_epoch, input_type):
         tr_loss_arr = []
 
         # for batch, data in enumerate(loader_train, 1):
-        for batch, data in enumerate(tqdm(loader_train, total = len(loader_train), postfix = 'train'), 1):
+        for data in tqdm(loader_train, total = len(loader_train), postfix = 'train'):
         
             # forward
-            # label = data['label'].to(device, non_blocking=True)   
-            # inputs = data['input'].to(device, non_blocking=True)
             label = data['label'].to(device)
             inputs = data['input'].to(device)
             
@@ -117,15 +103,13 @@ def train(rank, data_loader, lr, num_epoch, input_type):
         writer_train.add_scalar('loss', np.mean(tr_loss_arr), epoch)
 
         # validation
-        with torch.no_grad(): # validation 이기 때문에 backpropa 진행 x, 학습된 네트워크가 정답과 얼마나 가까운지 loss만 계산
-            net.eval() # 네트워크를 evaluation 용으로 선언
+        with torch.no_grad(): 
+            net.eval()
             val_loss_arr = []
 
             # for batch, data in enumerate(loader_val,1):
-            for batch, data in enumerate(tqdm(loader_val, total = len(loader_val), postfix = 'valid'), 1):
+            for data in tqdm(loader_val, total = len(loader_val), postfix = 'valid'):
                 # # forward
-                # label = data['label'].to(device, non_blocking=True)
-                # inputs = data['input'].to(device, non_blocking=True)
                 label = data['label'].to(device)
                 inputs = data['input'].to(device)
                 output = net(inputs)
@@ -133,7 +117,6 @@ def train(rank, data_loader, lr, num_epoch, input_type):
                 # loss 
                 loss = fn_loss(output,label)
                 val_loss_arr += [loss.item()]
-                # print('valid : epoch %04d / %04d | Batch %04d \ %04d | Loss %.05f'%(epoch,num_epoch,batch,len(loader_val),np.mean(loss_arr)))
 
                 # Tensorboard 저장하기
                 label = fn_tonumpy(label)
@@ -146,8 +129,6 @@ def train(rank, data_loader, lr, num_epoch, input_type):
                 # writer_val.add_image('output', output, len(loader_val) * (epoch - 1) + batch, dataformats='NHWC')
 
             writer_val.add_scalar('loss', np.mean(val_loss_arr), epoch)
-            # print('valid : epoch %04d / %04d | Loss %.05f'%(epoch, num_epoch, np.mean(val_loss_arr)))
-
             writer_train.close()
             writer_val.close()
 
@@ -158,11 +139,8 @@ def train(rank, data_loader, lr, num_epoch, input_type):
 # def main(rank, world_size):
 
 #     print(f'# of gpu: {world_size}, gpu id: {rank}\n')
-
 #     data_loader = create_data_loader(data_dir, batch_size, input_type)
-
 #     train(rank, data_loader, lr, num_epoch, input_type)
-
 
 if __name__ == '__main__':
 
@@ -171,8 +149,7 @@ if __name__ == '__main__':
     rank = args.local_rank
     world_size = torch.cuda.device_count() #8
 
-
-    torch.cuda.set_device(rank[0])
+    # torch.cuda.set_device(rank[0])
 
     # os.environ['MASTER_ADDR'] = '192.168.0.38'
     # os.environ['MASTER_PORT'] = '10011'
