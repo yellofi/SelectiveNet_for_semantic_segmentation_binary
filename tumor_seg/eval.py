@@ -3,15 +3,16 @@ import os
 import numpy as np
 import torch
 from tqdm import tqdm
-from data_utils import *
-from model import *
-from tqdm import tqdm
-from typing import OrderedDict
-from sklearn.metrics import roc_auc_score 
 import matplotlib.pyplot as plt
 from PIL import Image
 from matplotlib import cm
 import csv
+
+from data_utils import *
+from Dataset_samsung import *
+from model import UNet
+from net_utils import *
+from compute_metric import *
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -43,68 +44,11 @@ def parse_arguments():
 
     return args
 
-def net_test_load(model_path, net, device=None):
-    if device != None:
-        dict_model = torch.load(model_path, map_location=device)
-    else:
-        dict_model = torch.load(model_path, map_location='cpu')
-    
-    k = list(dict_model['net'].keys())[0]
-    if "module" in k:
-        dict_model['net'] = remove_module(dict_model)
-    net.load_state_dict(dict_model['net'])
-
-    print('     model: ', model_path)
-    return net
-
-def get_target_value_index(array, target_value):
-    # index = set([i for i, v in enumerate(array) if v == target_value])
-    index = np.where(array == target_value)[0]
-    return index
-
-def get_performance(label, output, predict, isprint = False):
-
-    """
-    label, output, predict (N, ): numpy ndarray 
-    """
-
-    label = label.flatten()
-    output = output.flatten()
-    predict = predict.flatten()
-
-    C1, C0 = get_target_value_index(label, 1), get_target_value_index(label, 0)
-    P1, P0 = get_target_value_index(predict, 1), get_target_value_index(predict, 0)
-
-    TP, TN = np.intersect1d(C1, P1), np.intersect1d(C0, P0) 
-    FP, FN = np.setdiff1d(P1, C1), np.setdiff1d(P0, C0)
-
-    accuracy = (len(TP) + len(TN))/(len(C1) + len(C0))
-
-    recall, precision, f1_score = np.NaN, np.NaN, np.NAN
-    if len(C1) != 0:    recall = len(TP) / len(C1)
-    if len(P1) != 0:    precision = len(TP) / len(P1)
-
-    if recall != np.NaN and precision != np.NaN and recall + precision != 0:
-        f1_score = 2*recall*precision/(recall + precision)
-
-    auc_score = np.NaN
-    if len(C1) != 0 and len(C0) != 0:
-        auc_score = roc_auc_score(label, output)
-
-    if isprint:
-        print(f'accuracy: {accuracy:.3f} | recall: {recall:.3f} | precision: {precision:.3f} | f1 score: {f1_score:.3f} | AUC score: {auc_score:.3f}')
-
-    return accuracy, recall, precision, f1_score, auc_score
-
 def sigmoid(z):
     return 1/(1+np.e**(-(z.astype('float64')-0.5)))
 
 def make_heatmap(output):
-    # output = output-output.min()
-    # output = output/output.max()
-
-    output = sigmoid(output)
-    # output = np.clip(output, 0, 1).astype('float32')
+    # output = sigmoid(output)
     heatmap = cm.jet(output)[:, :, :3]
     return heatmap.astype('float32')
 
@@ -132,7 +76,6 @@ if __name__ == '__main__':
 
     test_list = construct_test(data_dir, test_fold = test_fold)
     transform = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
-
     dataset = SamsungDataset(data_dir = data_dir, data_list = test_list, transform = transform, input_type = input_type)
 
     print("     # of test dataset", len(dataset))
@@ -148,7 +91,7 @@ if __name__ == '__main__':
 
     if len(rank) != 1:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        net = UNet(input_type, DataParallel=True)
+        net = UNet(input_type)
         net = net_test_load(model_path, net)
         net = torch.nn.DataParallel(net, device_ids=rank)
         net = net.to(device)
@@ -209,7 +152,6 @@ if __name__ == '__main__':
             pred.save(os.path.join(result_dir, f'{id}_pred.png'))
 
             patch_level_performance.append(get_performance(l, o, p))
-
 
     patch_level_performance = np.nanmean(np.concatenate([patch_level_performance]), axis = 0)
 
