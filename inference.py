@@ -9,7 +9,8 @@ import cv2
 
 from patch_gen.slide_utils import *
 from tumor_seg.Dataset_inference import *
-from tumor_seg.model import *
+from tumor_seg.net_utils import *
+from tumor_seg.model import UNet
 
 from torch.utils.data import DataLoader
 import torch.backends.cudnn as cudnn
@@ -48,9 +49,6 @@ def parse_arguments():
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=16, help='Dataloader num_workers')
 
-    # parser.add_argument('--model_path', type=str, 
-    #                     default='*/model/model.pth', help='model path (*.pth)')
-    
     parser.add_argument('--model_dir', type=str, 
                         default='*/model', help='network ckpt (.pth) directory')
     parser.add_argument('--model_arch', type=str, nargs = '+',
@@ -63,26 +61,12 @@ def parse_arguments():
     parser.add_argument('--save_dir', action="store", type=str,
                         default='/mnt/ssd1/biomarker/c-met/final_output')
 
-    
 
     args = parser.parse_args()
     print('')
     print('args={}\n'.format(args))
 
     return args
-
-def net_test_load(model_path, net, device=None):
-    if device != None:
-        ckpt = torch.load(model_path, map_location=device)
-    else:
-        ckpt = torch.load(model_path)
-
-    try: ckpt['net'] = remove_module(ckpt)
-    except: pass
-    net.load_state_dict(ckpt['net'])
-
-    # print('     model: ', model_path)
-    return net
 
 def make_wsi_mask_(slide, level, slide_patch_ratio, slide_mask_ratio, pred_dir):
     """
@@ -156,7 +140,6 @@ def make_wsi_mask(slide, level, patch_size, slide_patch_ratio, slide_mask_ratio,
 
     return mask
     
-
 def make_wsi_xml(mask, slide_mask_ratio, color = "-65536", ano_class = "Pattern5"):
 
     contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -230,11 +213,14 @@ def main(args, slide_path, ROI_path):
 
     total_time = 0
 
+    print("Patch Loader...")
+
     """
     Tissue Mask
     """
 
-    print("Mask Tissue Mask...")
+    patch_loader_time = 0
+    start_time = time.time() 
 
     slide = OpenSlide(slide_path)
     slide_mpp = float(slide.properties['openslide.mpp-x'])
@@ -246,59 +232,34 @@ def main(args, slide_path, ROI_path):
     else:
         slide_mag = 200
 
-    # print(slide.dimensions)
-
     # slide_mag = float(slide.properties['openslide.objective-power']) 
     # slide_mag = int(slide_mag*10)
-
-    ROI_mask_time = 0
-    start_time = time.time()    
+ 
     ROI_mask = None
 
     if os.path.isfile(ROI_path):
         RAN = Annotation(slide = slide, level = -1)
         ROI_annotations, _ = RAN.get_coordinates(xml_path = ROI_path, target = 'tissue_region')
         ROI_mask = RAN.make_mask(annotations=ROI_annotations, color = 255)
-        end_time = time.time()
-        ROI_mask_time += (end_time - start_time)
-        total_time += ROI_mask_time
     else:
         print(f'    Region of Interest file {ROI_path} does not exist')
 
         # print(f'ROI Mask Time: {round(ROI_mask_time, 2)} sec')
 
-    tissue_mask_time = 0
-    start_time = time.time() 
     TM = TissueMask(slide = slide, level = -1, ROI_mask = ROI_mask)
     tissue_mask, slide_mask_ratio = TM.get_mask_and_ratio(tissue_mask_type = args.tissue_mask_type)
 
     # if not os.path.isfile(save_dir + f'/{slide_name}_tissue_mask.jpg'):
     #     cv2.imwrite(save_dir + f'/{slide_name}_tissue_mask.jpg', tissue_mask)
 
-    end_time = time.time()
-    tissue_mask_time += (end_time - start_time)
-    total_time += tissue_mask_time
-
-    print(f'    slide mag: {slide_mag}')
-    print(f'    slide mpp: {slide_mpp}')
-    print(f'    slide/tissue_mask ratio: {slide_mask_ratio}')
-
-    print(f'    ROI Mask Time: {round(ROI_mask_time, 2)} sec')
-    print(f'    Tissue Mask Time: {round(tissue_mask_time, 2)} sec')
-
     """
     Coordinates, Dataset and Dataloader
     """
-
-    print("Coordinates, Dataset and Dataloader...")
 
     patch_mag = args.patch_mag
     patch_size = args.patch_size
     patch_stride = args.patch_stride
     slide_patch_ratio = slide_mag//patch_mag
-
-    slide_loader_time = 0
-    start_time = time.time() 
 
     size_on_slide = int(patch_size*slide_patch_ratio)
     step_on_slide = int(patch_stride*slide_patch_ratio)
@@ -327,10 +288,13 @@ def main(args, slide_path, ROI_path):
     test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True, drop_last=False)
 
     end_time = time.time()
-    slide_loader_time += (end_time - start_time)
+    patch_loader_time += (end_time - start_time)
 
-    total_time += slide_loader_time
+    total_time += patch_loader_time
 
+    print(f'    slide mag: {slide_mag}')
+    print(f'    slide mpp: {slide_mpp}')
+    print(f'    slide/tissue_mask ratio: {slide_mask_ratio}')
     print(f'    patch mag: {patch_mag}')
     print(f'    patch size: {patch_size}')
     print(f'    patch stride: {patch_stride}')
@@ -338,7 +302,7 @@ def main(args, slide_path, ROI_path):
     print(f'    # of patch: {len(xy_coord)}')
     print(f'    batch size: {args.batch_size}')
     print(f'    num workers: {args.num_workers}')
-    print(f'    Slide Loader Time: {round(slide_loader_time, 2)} sec')
+    print(f'    Patch Loader Time: {round(patch_loader_time, 2)} sec')
 
     """
     Load Tumor Segmentation Model
@@ -396,7 +360,7 @@ def main(args, slide_path, ROI_path):
     print(f'    input type: {input_type}')
     print(f'    local ranks: {rank}')
     print(f'    device: {device}')
-    print(f'    Load Model Time: {round(load_model_time, 2)} sec')
+    print(f'    Model Loading Time: {round(load_model_time, 2)} sec')
 
     """
     Tumor Prediction and IHC Analyzer
@@ -451,6 +415,9 @@ def main(args, slide_path, ROI_path):
             pred = fn_classifier(output)
             model_output.extend(np.uint8(pred*255))
 
+            x_coord.extend(x)
+            y_coord.extend(y)
+
             """
             아마 여기서 input과 output(tumor mask)를 가지고 analyzer에 입력해야할 수 있음
 
@@ -460,13 +427,8 @@ def main(args, slide_path, ROI_path):
                 visualizations.extend(v)
             """
 
-            x_coord.extend(x)
-            y_coord.extend(y)
-
             del input, output, pred
             torch.cuda.empty_cache()
-
-            # print(f'    batch - {i+1} / {len(test_loader)}')
         
     end_time = time.time()
 
@@ -499,7 +461,7 @@ def main(args, slide_path, ROI_path):
     tumor_mask_ = cv2.resize(tumor_mask, slide.level_dimensions[-1], interpolation=cv2.INTER_AREA)
 
     print(f'    slide/tumor_mask ratio: {slide_mask_ratio}')
-    print(f'    patch-level mask to WSI Mask Time: {round(wsi_mask_time, 2)} sec')
+    print(f'    Making WSI-level Mask Time: {round(wsi_mask_time, 2)} sec')
 
     cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask.png'), tumor_mask_)
     # cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask_median_blur_15.png'), mask_mb_15)
@@ -513,15 +475,12 @@ def main(args, slide_path, ROI_path):
     os.makedirs(xml_save_dir, exist_ok = True)
 
     xml = make_wsi_xml(tumor_mask, slide_mask_ratio, color = tumor_color, ano_class = tumor_class)
-    # xml_mb_15 = make_wsi_xml(mask_mb_15, slide_mask_ratio, color = tumor_color, ano_class = tumor_class)
     ET.ElementTree(xml).write(os.path.join(xml_save_dir, f'{slide_name}.xml'))
-    # ET.ElementTree(xml).write(os.path.join(save_dir, 'xml', 'raw', f'{slide_name}.xml'))
-    # ET.ElementTree(xml_mb_15).write(os.path.join(save_dir, 'xml', 'mb_15', f'{slide_name}.xml'))
 
     end_time = time.time()
     mask_xml_time += (end_time - start_time)
     total_time += mask_xml_time
-    print(f'    WSI Mask to Xml Time: {round(mask_xml_time, 2)} sec')
+    print(f'    WSI Mask to .xml Time: {round(mask_xml_time, 2)} sec')
     print(f'    Total Elapsed Time: {round(total_time, 0)}s')
     m, s = divmod(total_time, 60)
     print(f'    Total Elapsed Time: {m}m {round(s, 0)}s')
