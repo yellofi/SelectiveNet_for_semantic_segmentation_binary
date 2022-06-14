@@ -6,13 +6,17 @@ from .data_utils import RGB2GH, H_RGB
 
 class Dataset(torch.utils.data.Dataset):
 
-    def __init__(self, slide, xy_coord, size_on_slide, patch_size, transform=None, mean=0.5, std=0.5, input_type='RGB'):
+    def __init__(self, slide, xy_coord, size_on_slide, patch_size, mean=0.5, std=0.5, input_type='RGB'):
 
         self.slide = slide
         self.xy_coord = xy_coord
         self.slide_level = 0
         self.patch_size = patch_size
         self.size_on_slide = size_on_slide
+        
+        self.mean = mean
+        self.std = std
+        self.input_type = input_type
 
         self.data_dir = '/mnt/ssd1/biomarker/c-met/final_output/check'
         # self.data_dir = '/mnt/ssd1/biomarker/c-met/data/LOGONE_AT2/patch/S-LC0027-MET/200x_1024'
@@ -21,14 +25,8 @@ class Dataset(torch.utils.data.Dataset):
 
         # self.img_list = img_list
 
-        self.input_type = input_type
-        self.transform = transform 
-        self.mean = mean
-        self.std = std
-
     def __len__(self):
         return len(self.xy_coord)
-        # return len(self.img_list)
 
     def __getitem__(self, index):
 
@@ -42,7 +40,6 @@ class Dataset(torch.utils.data.Dataset):
         # input.convert('RGB').save(os.path.join(self.data_dir, f'S-LC0027-MET_{coord[0]}_{coord[1]}_input_90.jpg'), quality=90)
         input = np.array(input.convert('RGB'))
 
-        # print(input.dtype, input.shape, input.max(), input.min())
         # Blankfield Correction, 밝은 영역 평균을 구해 그걸로 255로 맞추고 scale 다시 맞추는 작업
         # input = correct_background(input)
 
