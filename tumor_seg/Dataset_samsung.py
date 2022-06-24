@@ -2,7 +2,7 @@ import os
 import numpy as np
 import torch
 from PIL import Image
-from data_utils import RGB2GH, H_RGB
+from data_utils import *
 
 """
 삼성병원 데이터셋 1차 annotation 
@@ -12,6 +12,8 @@ tumor label 기준으로 non_tumorable, tumorable을 구분하여
 각각 동일한 비율로 train, valid 구성 
 
 """
+
+np.random.seed(42)
 
 def split_train_valid(TRAIN_list, valid_ratio = 0.2):
     total_n = len(TRAIN_list)
@@ -53,7 +55,7 @@ def construct_test(data_dir, test_fold = 1):
 
 class SamsungDataset(torch.utils.data.Dataset):
 
-    def __init__(self, data_dir, data_list, patch_mag = 200, patch_size = 256, transform=None, input_type='RGB'):
+    def __init__(self, data_dir, data_list, patch_mag = 200, patch_size = 256, input_type='RGB', transform=None): 
         self.data_dir = data_dir
         self.data_list = data_list
         self.transform = transform
@@ -94,18 +96,12 @@ class SamsungDataset(torch.utils.data.Dataset):
         # input = correct_background(input)
 
         input, label = input/255.0, label/255.0
-        input, label = input.astype(np.float32), label.astype(np.float32)
+        input, label = input.astype(np.float32), label.astype(np.uint8)
 
         if self.input_type == 'GH':
             input = RGB2GH(input)
-
-        if self.input_type == 'H_RGB':
+        elif self.input_type == 'H_RGB':
             input = H_RGB(input)
-
-        if label.ndim == 2:
-            label = label[:, :, np.newaxis]
-        if input.ndim == 2:
-            input = input[:, :, np.newaxis]
 
         data = {}
         data['id'] = self.input_list[index].split('_input')[0]
@@ -116,3 +112,13 @@ class SamsungDataset(torch.utils.data.Dataset):
             data = self.transform(data)
 
         return data
+
+if __name__ == "__main__":
+
+    total_n = 20
+    valid_ratio = 0.8
+    valid_idx = np.random.choice(total_n, size = int(total_n*valid_ratio), replace = False)
+    train_idx = np.setdiff1d([i for i in range(total_n)], valid_idx)
+
+    print(valid_idx)
+    print(train_idx)
