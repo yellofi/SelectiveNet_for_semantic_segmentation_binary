@@ -103,30 +103,32 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
     try: mpp =  float(slide.properties['openslide.mpp-x']) #svs, ndpi, mrxs, tif(Roche)
     except: mpp = 10000 / float(slide.properties['tiff.XResolution']) # tif
 
+    
     # ROI_mask -> target tissue 영역 annotation
     # tumor_label -> target tissue 영역 안의 tumor annotation
     # non_target_label -> target tissue 영역 안의 non target object annotation (benign에도 비포함) 
     ROI_mask, tumor_label, non_target_label, label_level = None, None, None, None
+    SM = SlideMask(slide=slide)
     if ROI_file != None:
         ROI_path = args.ROI_dir + '/' + ROI_file
-        RAN = Annotation(slide = slide, level = -1)
-        ROI_annotations, _ = RAN.get_coordinates(xml_path = ROI_path, target = 'tissue_region')
-        ROI_mask = RAN.make_mask(annotations=ROI_annotations, color = 255)
+        ROI_annotation, _ = SM.get_coordinates(ROI_path, level = -1, target = 'tissue_region')
+        ROI_mask = SM.make_mask(ROI_annotation, level = -1, color = 255)
         # cv2.imwrite(args.save_dir + f'/{slide_name}_ROI_mask.jpg', ROI_mask)
 
     if label_file != None:
         label_path = args.label_dir + '/' + label_file
         label_level = args.label_level
-        TAN = Annotation(slide = slide, level = label_level)
-        tumor_annotations, non_target_annotations = TAN.get_coordinates(xml_path = label_path, target = 'tumor_region')
-        tumor_label = TAN.make_mask(annotations=tumor_annotations, color = 255)
+        tumor_annotations, non_target_annotations = SM.get_coordinates(xml_path = label_path, level = label_level, target = 'tumor_region')
+        tumor_label = SM.make_mask(tumor_annotations, label_level, color = 255)
         # cv2.imwrite(args.save_dir + f'/{slide_name}_tumor_mask.jpg', tumor_label)
         if len(non_target_annotations) != 0:
-            non_target_label = TAN.make_mask(annotations=non_target_annotations, color = 255)
+            non_target_label = SM.make_mask(non_target_annotations, label_level, color = 255)
             # cv2.imwrite(args.save_dir + f'/{slide_name}_non_target_mask.jpg', non_target_label)
 
-    TM = TissueMask(slide = slide, level = -1, ROI_mask = ROI_mask, NOI_mask = non_target_label)
-    tissue_mask, slide_mask_ratio = TM.get_mask_and_ratio(tissue_mask_type = args.tissue_mask_type)
+    tissue_mask, slide_mask_ratio = SM.get_tissue_mask(ROI_mask, NOI_mask = non_target_label, level = -1, tissue_mask_type=args.tissue_mask_type)
+
+    white = SM.estimate_blankfield_white(ratio=0.01)
+
     # cv2.imwrite(args.save_dir + f'/{slide_name}_tissue_mask.jpg', tissue_mask)
 
     if not os.path.isfile(args.save_dir + f'/{slide_name}_tissue_mask.jpg'):
@@ -226,7 +228,12 @@ def generate_patch(args, slide_file, ROI_file = None, label_file = None, target_
                         input_save_path = os.path.join(patch_save_dir, slide_name + '_' + str(_x)+'_'+str(_y)+'_input.jpg')
 
                         if not os.path.isfile(input_save_path):
-                            img.convert('RGB').save(input_save_path, quality = 90) # default 75는 compression artifact가 생김 
+                            
+                            img = correct_background(np.array(img.convert('RGB')), white=white)
+                            Image.fromarray(img).convert('RGB').save(input_save_path, quality = 90)
+
+                            # default 75는 compression artifact가 생김
+                            # img.convert('RGB').save(input_save_path, quality = 90) 
                         slide_ = cv2.rectangle(slide_, (_x//slide_mask_ratio, _y//slide_mask_ratio), 
                         (_x//slide_mask_ratio+mask_step_size, _y//slide_mask_ratio+mask_step_size), color=(0, 255, 0), thickness=2)
 

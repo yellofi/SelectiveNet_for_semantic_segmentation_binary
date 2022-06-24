@@ -1,6 +1,7 @@
 import numpy as np
 import cv2
 from xml.etree.ElementTree import parse
+from PIL import Image
 
 def get_ROI_mask(slide, xml_path):
     """
@@ -58,24 +59,17 @@ def get_ROI_mask(slide, xml_path):
     return ROI_mask
 
 """
-Label maker
+Mask Maker
 """
-import multiprocessing as mp
-# pool = mp.Pool(processes=12)
-# pool.map(count, num_list)
-# pool.close()
-# pool.join()
-class Annotation:
-    def __init__(self, slide, level = -1):
+class SlideMask:
+    def __init__(self, slide):
         self.slide = slide
-        self.level = level
 
-    def get_coordinates(self, xml_path, target = 'tumor_region'):
-
+    def get_coordinates(self, xml_path, level, target = 'tumor_region'):
         xml_path = xml_path
         xml = parse(xml_path).getroot()
         
-        slide_mask_ratio = round(self.slide.level_downsamples[self.level])
+        slide_mask_ratio = round(self.slide.level_downsamples[level])
 
         annotations = []
         non_target_annotations = []
@@ -100,25 +94,12 @@ class Annotation:
                     non_target_annotations.append(annotation)
             elif target == 'tissue_region':
                 annotations.append(annotation)
-
+                
         return annotations, non_target_annotations
-
-    # def draw_contours(self, mask, anno, color):
-    #     _anno = []
-    #     for coors in anno:
-    #         _anno.append(np.array(coors))
-    #     cv2.drawContours(mask, _anno, -1, color, -1)
-    
-    def make_mask(self, annotations, color = 255):
-        width, height = self.slide.level_dimensions[self.level]
+        
+    def make_mask(self, annotations, level, color = 255):
+        width, height = self.slide.level_dimensions[level]
         mask = np.zeros((height, width)).astype(np.uint8)
-        # mask = np.zeros((height, width, 3)).astype(np.uint8)
-       
-        # pool = mp.Pool(processes=12)
-        # pool.map(self.draw_contours, [(mask, anno, color) for anno in annotations])
-        # # result = pool.map_async(self.draw_contours, [(mask, anno, color) for anno in annotations])
-        # pool.close()
-        # pool.join()
 
         for anno in annotations:
             _anno = []
@@ -128,29 +109,16 @@ class Annotation:
 
         return mask
 
-
-
-"""
-Tissue Masking
-"""
-
-class TissueMask:
-    def __init__(self, slide, level = -1, ROI_mask = None, NOI_mask = None):
-        self.slide = slide
-        self.level = level
-        self.ROI_mask = ROI_mask
-        self.NOI_mask = NOI_mask
-
-    def make_tissue_mask_otsu(self, slide, ROI_mask, NOI_mask, level):
+    def make_tissue_mask_otsu(self, ROI_mask, NOI_mask, level):
         """
-        Args:
-            slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
-            ROI mask (np.array): ROI (Region of Interest) mask, a binary mask whose size is the same with the lowest resolution (level 3) of slide
-
         get a tissue mask on ROI, using Otsu's thresholding in HSV channel
 
         RGB2HSV -> S, V_inv (1 - V) -> S' = Otsu(S), V_inv' = Otsu(V_inv) 
         -> S" = MorpOp(S'), V_inv" MorpOp(V_inv') ->  tissue mask = OR(S", V_inv")
+
+        Args:
+            slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
+            ROI mask (np.array): ROI (Region of Interest) mask, a binary mask whose size is the same with the lowest resolution (level 3) of slide
 
         Return:
             tissue mask (np.array): a gray image (binary mask)
@@ -161,8 +129,8 @@ class TissueMask:
         # else:
         #     level_index = 3
 
-        slide_thumbnail = slide.get_thumbnail(slide.level_dimensions[level]) 
-        slide_mask_ratio = round(slide.level_downsamples[level])
+        slide_thumbnail = self.slide.get_thumbnail(self.slide.level_dimensions[level]) 
+        slide_mask_ratio = round(self.slide.level_downsamples[level])
         
         slide_rgb = slide_thumbnail.convert('RGB') 
         otsu_image = cv2.cvtColor(np.array(slide_rgb), cv2.COLOR_BGR2HSV)
@@ -194,16 +162,14 @@ class TissueMask:
         
         return otsu_image.astype(float)*255, slide_mask_ratio
 
-    def make_tissue_mask_sobel(self, slide, ROI_mask, NOI_mask, level):
-
+    def make_tissue_mask_sobel(self, ROI_mask, NOI_mask, level):
         """
+        get a tissue mask on ROI, using Edge Detection
+        RGB2GRAY -> Edge Detection (Sobel) -> Morphological Op. (Closing and Opening) 
+
         Args:
             slide: WSI (Whole Slide Image), slide = openslide.OpenSlide('/~/*.svs')
             ROI mask (np.array): ROI (Region of Interest) mask, a binary mask whose size is the same with the lowest resolution (level 3) of slide
-
-        get a tissue mask on ROI, using Edge Detection
-
-        RGB2GRAY -> Edge Detection (Sobel) -> Morphological Op. (Closing and Opening) 
 
         Return:
             edge mask (np.array): a gray image (binary mask)
@@ -214,10 +180,10 @@ class TissueMask:
         # else:
         #     level_index = 3
 
-        slide_thumbnail = slide.get_thumbnail(slide.level_dimensions[level]) 
+        slide_thumbnail = self.slide.get_thumbnail(self.slide.level_dimensions[level]) 
         slide_gray = np.array(slide_thumbnail.convert('L')) 
 
-        slide_mask_ratio = round(slide.level_downsamples[level])
+        slide_mask_ratio = round(self.slide.level_downsamples[level])
 
         if type(ROI_mask) != type(None):
             slide_gray = cv2.bitwise_and(slide_gray, ROI_mask)
@@ -240,86 +206,62 @@ class TissueMask:
             
         return edge_mask, slide_mask_ratio
 
-    def get_mask_and_ratio(self, tissue_mask_type = 'sobel'):
+    def get_tissue_mask(self, ROI_mask, NOI_mask, level, tissue_mask_type = 'sobel'):
         if tissue_mask_type == 'otsu':
-            tissue_mask, slide_mask_ratio = self.make_tissue_mask_otsu(self.slide, self.ROI_mask, self.NOI_mask, self.level)
+            tissue_mask, slide_mask_ratio = self.make_tissue_mask_otsu(ROI_mask, NOI_mask, level)
         elif tissue_mask_type == 'sobel':
-            tissue_mask, slide_mask_ratio = self.make_tissue_mask_sobel(self.slide, self.ROI_mask, self.NOI_mask, self.level)
+            tissue_mask, slide_mask_ratio = self.make_tissue_mask_sobel(ROI_mask, NOI_mask, level)
         return tissue_mask, slide_mask_ratio
 
-def make_mask(slide):
-    """ make tissue mask using HSV mode from openslide object.
+    def estimate_blankfield_white(self, ratio=0.01):
+        """
+        estimate blankfield of slide  
 
-    Args:
-        slide (openslide object): slide
+        Args
+            ratio: a ratio to determine a threshold for blankfield in accumulated histogram 
+                        N = maximum value of accumulated histogram
+                        k = (N - ratio / 2)
 
-    Return:
-        tissue_mask (np.array): output tissue mask.
-        mask_slide_ratio (int): relative down magnification when compared to
-            original size.
+                        If, at an index, the value of a accumulated histogram is not higher than N - k, 
+                        the index becomes a threshold to determine blankfield
+        Return
+            white: tuple, (R_white_mean, G_white_mean, B_white_mean)
+        """
 
-    """
+        slide_thumbnail = self.slide.get_thumbnail(self.slide.level_dimensions[-1]) 
+        slide_rgb= np.array(slide_thumbnail.convert('RGB'))
 
-    if slide.level_count < 4:
-        level_index = slide.level_count-1
-    else:
-        level_index = 3
-
-    slide_thumbnail = slide.get_thumbnail(slide.level_dimensions[level_index]) 
-    slide_thumbnail = slide_thumbnail.convert('RGB') 
-
-    mask_slide_ratio = round(slide.level_downsamples[level_index])
-
-    slide_array = np.array(slide_thumbnail, dtype=np.uint8)
-
-    kernel_size = 11
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-    patch = slide_thumbnail.convert('HSV')
-    patch = np.array(patch)
-    patch = patch.astype(np.float32)
-
-    h_test = np.zeros((patch.shape[0], patch.shape[1]))
-    h_test[patch[:, :, 0] > 180] = 1
-    h_test[patch[:, :, 0] < 20] = 1
-    h_test[patch[:, :, 0] == 0] = 0
-
-    s_test = np.zeros((patch.shape[0], patch.shape[1]))
-    s_test[patch[:, :, 1] < 240] = 1
-    s_test[patch[:, :, 1] < 20] = 0
-
-    v_test = np.zeros((patch.shape[0], patch.shape[1]))
-    v_test[patch[:, :, 2] > 30] = 1
-
-    black_test = np.zeros((patch.shape[0], patch.shape[1]))
-    patch = np.array(slide_array, float)
-    patch_new = patch[:, :, 0] + patch[:, :, 1] + patch[:, :, 2]
-    patch_new = patch_new / 3
-    black_test[patch_new > 100] = 1
-
-    patch_mask = h_test * s_test * v_test * black_test * 255
-
-    tissue_mask = cv2.morphologyEx(patch_mask, cv2.MORPH_CLOSE, kernel)
-    tissue_mask = cv2.morphologyEx(tissue_mask, cv2.MORPH_OPEN, kernel)
-
-    return tissue_mask.astype(float), mask_slide_ratio
-
-def make_patch_(patch):
-    """
-    corresponding smaller sized gray-scale patch for blurrity check 
-    """
-    patch = np.array(patch)
-    patch = patch.astype(np.float32)
-    patch = np.expand_dims(patch, axis=0)
-    patch = np.ascontiguousarray(patch, dtype=np.float32)
-    return patch
-
-
+        rgb = slide_rgb.copy()
+        gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+        hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+        for i in range(1, 256):
+            hist[i][0] += hist[i - 1][0]
+        N = hist[-1][0]
+        k = round(N * ratio / 2)
+        threshold = 255
+        while hist[threshold][0] > N - k:
+            threshold -= 1
+        mask = (gray >= threshold).astype(np.uint8)
+        white = np.array(cv2.mean(rgb, mask=mask)[:3], dtype=np.uint8)
+        return white
 
 """
 Blankfield Correction
 """
 # 영상내 밝기가 높은 값을 찾고, 그 영역의 밝기 평균을 구함
 def estimate_blankfield_white(image, ratio=0.01):
+    """
+    Args
+        image: a RGB image, (H, W, 3)
+        ratio: a ratio to determine a threshold for blankfield in accumulated histogram 
+                    N = maximum value of accumulated histogram
+                    k = (N - ratio / 2)
+
+                    If, at an index, the value of a accumulated histogram is not higher than N - k, 
+                    the index becomes a threshold to determine blankfield
+    Return
+        white: tuple, (R_white_mean, G_white_mean, B_white_mean)
+    """
     rgb = image.copy()
     gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
@@ -336,6 +278,11 @@ def estimate_blankfield_white(image, ratio=0.01):
 
 # 영상내 밝기 높은 영역의 평균이 255가 되도록, 0~255로 변경
 def correct_background(image, white=None, ratio=0.01, target=255):
+    """
+    Args
+        image: a RGB image, numpy.ndarray, (H, W, 3)
+    
+    """
     if white is None:
         white = estimate_blankfield_white(image, ratio=ratio)
     rgb = image.copy()
