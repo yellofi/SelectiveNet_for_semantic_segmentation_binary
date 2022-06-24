@@ -82,6 +82,7 @@ if __name__ == '__main__':
 
     rank = args.local_rank
     model_path = args.model_path
+    n_cls = args.n_cls
 
     print("Load Model...")
     
@@ -89,18 +90,44 @@ if __name__ == '__main__':
     fn_denorm = lambda x, mean, std : (x*std) + mean
     fn_classifier = lambda x : 1.0 * (x > 0.5)
 
-    if len(rank) != 1:
+    if args.model_arch == 'UNet':
+        net = UNet(input_type, n_cls, selective=args.selective)
+ 
+
+    if len(rank) != 1: # gpu 여러개 쓰고 싶을때, DP 
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        net = UNet(input_type)
-        net = net_test_load(model_path, net)
-        net = torch.nn.DataParallel(net, device_ids=rank)
+    elif len(rank) == 1: # 0번 말고 다른 gpu도 single로 쓰고 싶을때
+        device = torch.device(f'cuda:{rank}')
         net = net.to(device)
-    else:
-        # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
-        device = torch.device(f'cuda:{rank[0]}')
-        net = UNet(input_type).to(device)
-        net = net_test_load(model_path, net, device=device) 
-        torch.cuda.set_device(rank[0])
+
+    if not os.path.exists(model_path): 
+
+        if len(rank) != 1:
+            ckpt = torch.load(model_path, map_location='cpu')
+        elif len(rank) == 1:
+            ckpt = torch.load(model_path, map_location=device)
+
+        try: ckpt['net'] = remove_module(ckpt)
+        except: pass
+
+        net.load_state_dict(ckpt['net'])
+
+    if len(rank) > 1:
+        net = torch.nn.DataParallel(net, device_ids=rank)
+        net = net.cuda()
+
+    # if len(rank) != 1:
+    #     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    #     net = UNet(input_type)
+    #     net = net_test_load(model_path, net)
+    #     net = torch.nn.DataParallel(net, device_ids=rank)
+    #     net = net.to(device)
+    # else:
+    #     # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
+    #     device = torch.device(f'cuda:{rank[0]}')
+    #     net = UNet(input_type).to(device)
+    #     net = net_test_load(model_path, net, device=device) 
+    #     torch.cuda.set_device(rank[0])
         
     batch_size = args.batch_size # number of samples in an WSI (or a source image)
     loader = DataLoader(dataset, batch_size = batch_size, shuffle=False)
