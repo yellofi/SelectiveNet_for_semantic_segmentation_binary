@@ -10,7 +10,7 @@ import cv2
 from patch_gen.slide_utils import *
 from tumor_seg.Dataset_inference import *
 from tumor_seg.net_utils import *
-from tumor_seg.model import UNet
+from tumor_seg.model import *
 
 from torch.utils.data import DataLoader
 import torch.backends.cudnn as cudnn
@@ -236,18 +236,17 @@ def main(args, slide_path, ROI_path):
     # slide_mag = int(slide_mag*10)
  
     ROI_mask = None
-
+    SM = SlideMask(slide=slide)
     if os.path.isfile(ROI_path):
-        RAN = Annotation(slide = slide, level = -1)
-        ROI_annotations, _ = RAN.get_coordinates(xml_path = ROI_path, target = 'tissue_region')
-        ROI_mask = RAN.make_mask(annotations=ROI_annotations, color = 255)
+        ROI_annotation, _ = SM.get_coordinates(ROI_path, level = -1, target = 'tissue_region')
+        ROI_mask = SM.make_mask(ROI_annotation, level = -1, color = 255)
     else:
         print(f'    Region of Interest file {ROI_path} does not exist')
-
         # print(f'ROI Mask Time: {round(ROI_mask_time, 2)} sec')
 
-    TM = TissueMask(slide = slide, level = -1, ROI_mask = ROI_mask)
-    tissue_mask, slide_mask_ratio = TM.get_mask_and_ratio(tissue_mask_type = args.tissue_mask_type)
+    tissue_mask, slide_mask_ratio = SM.get_tissue_mask(ROI_mask, NOI_mask = None, level = -1, tissue_mask_type=args.tissue_mask_type)
+    
+    white = SM.estimate_blankfield_white(ratio=0.01)
 
     # if not os.path.isfile(save_dir + f'/{slide_name}_tissue_mask.jpg'):
     #     cv2.imwrite(save_dir + f'/{slide_name}_tissue_mask.jpg', tissue_mask)
@@ -284,7 +283,7 @@ def main(args, slide_path, ROI_path):
         
         cv2.imwrite(os.path.join(save_dir, f'{slide_name}_x{patch_mag}_{patch_size}_num-{len(xy_coord)}.jpg'), slide_)
 
-    test_set = Dataset(slide=slide, xy_coord=xy_coord, size_on_slide = size_on_slide, patch_size = patch_size)
+    test_set = Dataset(slide=slide, white=white, xy_coord=xy_coord, size_on_slide = size_on_slide, patch_size = patch_size)
     test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True, drop_last=False)
 
     end_time = time.time()
