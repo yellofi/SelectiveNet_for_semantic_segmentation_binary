@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torchvision import transforms
 
 """
-input transformation
+input (output) transformation
 """
 def RGB2GH(rgb_image):
     """
@@ -51,12 +51,10 @@ class Normalization(object):
 
     def __call__(self, data):
         label, input = data['label'], data['input']
-
         input = (input - self.mean) / self.std
 
         data['input'] = input
         data['label'] = label
-        # data = {'label': label, 'input': input}
 
         return data
 
@@ -66,17 +64,16 @@ class RandomFlip(object):
 
         # 50% 확률로 좌우반전
         if np.random.rand() > 0.5:
-            label = np.fliplr(label)
+            label = np.fliplr(label).copy()
             input = np.fliplr(input)
 
         # 50% 확률로 상하반전
         if np.random.rand() > 0.5:
-            label = np.flipud(label)
+            label = np.flipud(label).copy()
             input = np.flipud(input)
 
         data['input'] = input
         data['label'] = label
-        # data = {'label': label, 'input': input}
 
         return data
 
@@ -110,22 +107,67 @@ class PartialNonTissue(object):
         data['input'] = input
         data['label'] = label
 
-        # data = {'label': label, 'input': input}
-
         return data
 
 class ToTensor(object):
     def __call__(self, data):
         label, input = data['label'], data['input']
 
-        label = label.transpose((2, 0, 1)).astype(np.float32)
         input = input.transpose((2, 0, 1)).astype(np.float32)
 
         data['input'] = torch.from_numpy(input)
-        data['label'] = torch.from_numpy(label)
-        # data = {'label': torch.from_numpy(label), 'input': torch.from_numpy(input)}
+        data['label'] = torch.from_numpy(label).type(torch.LongTensor)
 
         return data
+
+if __name__ == "__main__":
+    
+    # NCHW = torch.tensor([[[[1, 2], [1, 0]]]])
+    # CHW = torch.tensor([[[1, 1], [1, 0]]])
+    # NCHW2 = torch.tensor([[[[0, 0], [0, 1]]]])
+
+    # print(NCHW)
+    # print(NCHW.size())
+
+    # label = torch.cat([NCHW, NCHW2], dim = 0)
+
+    # shape = (1, 3, 2, 2)
+    # result = torch.zeros(shape)
+    # result = result.scatter_(1, NCHW.cpu(), 1)
+
+    # print(result)
+    # print(result.size())
+
+    NCHW = np.array([[[[1, 2], [0, 1]]]]).astype('float32')
+    print(NCHW.shape)
+
+    print(NCHW)
+    print(type(NCHW), NCHW.dtype)
+
+    def np_2D_one_hot(label, n_cls = 2):
+        """
+        one hot encoding with 2D numpy array
+        Args
+            label: numpy.ndarray, np.float32, (N, 1, H, W)
+            n_cls: number of class
+        Return 
+            one_hot: numpy.ndarray, np.float32, (N, C, H, W)
+        """
+        shape = np.array(label.shape)
+        shape[1] = n_cls
+        shape = tuple(shape)
+        one_hot = np.zeros(shape)
+        for i in range(n_cls):
+            _, _, h, w = np.where(label == i)
+            one_hot[:, i, h, w] = 1
+
+        return one_hot.astype('float32')
+    
+    one_hot = np_2D_one_hot(NCHW, 3)
+    print(one_hot)
+    print(one_hot.shape)
+
+
 
 
 # get dataloaders which have their own sampler
