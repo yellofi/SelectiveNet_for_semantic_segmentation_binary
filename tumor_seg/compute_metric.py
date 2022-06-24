@@ -1,6 +1,90 @@
 import numpy as np
 from sklearn.metrics import roc_auc_score 
 
+class Evaluator(object):
+    def __init__(self, num_class, selective):
+        self.num_class = num_class
+        self.confusion_matrix = np.zeros((self.num_class, ) * 2)
+        self.selective = selective # (N, H, W)
+
+    def _generate_matrix(self, label, pred, selection=None):
+        """
+        label: annotated mask, numpy.ndarray, [0, 1, ..., (self.num_class-1)], (N, H, W)
+        pred: prediction mask, numpy.ndarray, [0, 1, ..., (self.num_class-1)], (N, H, W)
+        selection: selected mask, numpy.ndarray, [0, 1], (N, H, W)
+        """
+        mask = (label >= 0) & (label < self.num_class)
+        if self.selective:
+            mask = mask & (selection == 1)
+        label = self.num_class * label[mask].astype('int') + pred[mask]
+        count = np.bincount(label, minlength = self.num_class*2)
+        confusion_matrix = count.reshape(self.num_class, self.num_class)
+        return confusion_matrix
+    
+    def add_batch(self, label, pred, selection=None):
+        assert label.shape == pred.shape # (N, H, W)
+        self.confusion_matrix += self._generate_matrix(label, pred, selection=selection)
+    
+    def reset(self):
+        self.confusion_matrix = np.zeros((self.num_class, ) * 2)
+
+    def Confusion_Matrix(self):
+        print(self.confusion_matrix)
+        return self.confusion_matrix
+
+    def get_Pixel_Accuracy(self):
+        Acc = np.diag(self.confusion_matrix).sum() / self.confusion_matrix.sum()
+        return Acc
+
+    def get_Pixel_Accuracy_Class(self):
+        Acc = np.diag(self.confusion_matrix) / self.confusion_matrix.sum(axis=1)
+        Acc = np.nanmean(Acc)
+        return Acc
+
+    def get_Pixel_Accuracy_Class_S(self):
+        Acc = np.diag(self.confusion_matrix) / self.confusion_matrix.sum(axis=1)
+        return Acc
+
+    def get_Precision(self):
+        Prec = np.diag(self.confusion_matrix) / self.confusion_matrix.sum(axis=0)
+        return Prec
+    
+    def get_Recall(self):
+        Recall = np.diag(self.confusion_matrix) / self.confusion_matrix.sum(axis=1)
+        return Recall
+
+    def get_F1_Score(self, Prec, Recall):
+        F1_score = 2 * (Prec * Recall) / (Prec + Recall)
+        return F1_score
+
+    def get_mIoU(self):
+        MIoU = np.diag(self.confusion_matrix) / (
+                    np.sum(self.confusion_matrix, axis=1) + np.sum(self.confusion_matrix, axis=0) -
+                    np.diag(self.confusion_matrix))
+        MIoU = np.nanmean(MIoU)
+        return MIoU
+
+    def get_IoU_Class(self):
+        MIoU = np.diag(self.confusion_matrix) / (
+                    np.sum(self.confusion_matrix, axis=1) + np.sum(self.confusion_matrix, axis=0) -
+                    np.diag(self.confusion_matrix))
+        return MIoU
+
+    def get_FWIoU(self):
+        freq = np.sum(self.confusion_matrix, axis=1) / np.sum(self.confusion_matrix)
+        iu = np.diag(self.confusion_matrix) / (
+                    np.sum(self.confusion_matrix, axis=1) + np.sum(self.confusion_matrix, axis=0) -
+                    np.diag(self.confusion_matrix))
+
+        FWIoU = (freq[freq > 0] * iu[freq > 0]).sum()
+        return FWIoU
+   
+    def get_Dice_Score(self):
+        dice_score = 2*np.diag(self.confusion_matrix)/(np.sum(self.confusion_matrix, axis=1) + np.sum(self.confusion_matrix, axis=0))
+        return dice_score
+
+
+
 def get_target_value_index(array, target_value):
     # index = set([i for i, v in enumerate(array) if v == target_value])
     index = np.where(array == target_value)[0]
@@ -98,53 +182,59 @@ if __name__ == "__main__":
 
     # print(intersect, union)
 
-    import os
+    Prec = np.array([0.7, 0.9])
+    Recall = np.array([0.8, 0.8])
 
-    data_dir = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/06_baseline_samsung_data/1-fold/output/model_pred'
-    # data_dir = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/01_5-f_cv_baseline/minmax/model_pred'
-    label_list = [l for l in sorted(os.listdir(data_dir)) if 'label' in l]
-    pred_list  = [p for p in sorted(os.listdir(data_dir)) if 'pred' in p]
+    print(Prec*Recall)
+    print(2*Prec*Recall/(Prec+Recall))
 
-    assert len(label_list) == len(pred_list), 'numbers of label and prediction does not match'
+    # import os
 
-    N = len(label_list)
+    # data_dir = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/06_baseline_samsung_data/1-fold/output/model_pred'
+    # # data_dir = '/mnt/ssd1/biomarker/c-met/tumor_seg/model/01_5-f_cv_baseline/minmax/model_pred'
+    # label_list = [l for l in sorted(os.listdir(data_dir)) if 'label' in l]
+    # pred_list  = [p for p in sorted(os.listdir(data_dir)) if 'pred' in p]
 
-    from PIL import Image
-    from tqdm import tqdm
+    # assert len(label_list) == len(pred_list), 'numbers of label and prediction does not match'
 
-    IoU_0, IoU_1 = 0, 0
-    mIoU = 0
+    # N = len(label_list)
 
-    for (l, p) in tqdm(zip(label_list, pred_list), total = N):
-        if l.split('label')[0] != p.split('pred')[0]:
-            print(f'Required prediction corresponding to label | label: {l}, pred: {p}')
-            break
+    # from PIL import Image
+    # from tqdm import tqdm
+
+    # IoU_0, IoU_1 = 0, 0
+    # mIoU = 0
+
+    # for (l, p) in tqdm(zip(label_list, pred_list), total = N):
+    #     if l.split('label')[0] != p.split('pred')[0]:
+    #         print(f'Required prediction corresponding to label | label: {l}, pred: {p}')
+    #         break
         
-        label = np.array(Image.open(os.path.join(data_dir, l)).convert('L'))
-        pred = np.array(Image.open(os.path.join(data_dir, p)).convert('L'))
+    #     label = np.array(Image.open(os.path.join(data_dir, l)).convert('L'))
+    #     pred = np.array(Image.open(os.path.join(data_dir, p)).convert('L'))
 
-        # if not (0 in set(list(np.ravel(label))) or 255 in set(list(np.ravel(label)))):
-        #     print(l)
+    #     # if not (0 in set(list(np.ravel(label))) or 255 in set(list(np.ravel(label)))):
+    #     #     print(l)
 
-        # if not (0 in set(list(np.ravel(pred))) or 255 in set(list(np.ravel(pred)))):
-        #     print(l)
+    #     # if not (0 in set(list(np.ravel(pred))) or 255 in set(list(np.ravel(pred)))):
+    #     #     print(l)
 
-        label = np.uint8(label/255)
-        pred = np.uint8(pred/255)
+    #     label = np.uint8(label/255)
+    #     pred = np.uint8(pred/255)
 
-        iou_0 = compute_IoU(label, pred, 0)
-        iou_1 = compute_IoU(label, pred, 1)
+    #     iou_0 = compute_IoU(label, pred, 0)
+    #     iou_1 = compute_IoU(label, pred, 1)
 
-        miou = (iou_0 + iou_1) / 2.
+    #     miou = (iou_0 + iou_1) / 2.
 
-        IoU_0 += iou_0
-        IoU_1 += iou_1
-        mIoU += miou
+    #     IoU_0 += iou_0
+    #     IoU_1 += iou_1
+    #     mIoU += miou
 
-    IoU_0 /= N
-    IoU_1 /= N
-    mIoU /= N
+    # IoU_0 /= N
+    # IoU_1 /= N
+    # mIoU /= N
 
-    print('IoU (benign)', IoU_0)
-    print('IoU (tumor)', IoU_1)
-    print('Mean IoU', mIoU)
+    # print('IoU (benign)', IoU_0)
+    # print('IoU (tumor)', IoU_1)
+    # print('Mean IoU', mIoU)
