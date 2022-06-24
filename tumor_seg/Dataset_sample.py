@@ -2,11 +2,11 @@ import os
 import numpy as np
 import torch
 from PIL import Image
-from data_utils import RGB2GH, H_RGB
+from data_utils import *
 
 class Dataset(torch.utils.data.Dataset):
 
-    def __init__(self, data_dir, transform=None, input_type='RGB'):
+    def __init__(self, data_dir, input_type='RGB', transform=None):
         self.data_dir = data_dir
         self.transform = transform
         self.input_type = input_type
@@ -41,18 +41,17 @@ class Dataset(torch.utils.data.Dataset):
             # input = correct_background(input)
 
             input, label = input/255.0, label/255.0
-            input, label = input.astype(np.float32), label.astype(np.float32)
+            input, label = input.astype(np.float32), label.astype(np.uint8)
 
             if self.input_type == 'GH':
                 input = RGB2GH(input)
-
-            if self.input_type == 'H_RGB':
+            elif self.input_type == 'H_RGB':
                 input = H_RGB(input)
 
-            if label.ndim == 2:
-                label = label[:, :, np.newaxis]
-            if input.ndim == 2:
-                input = input[:, :, np.newaxis]
+            # if label.ndim == 2:
+            #     label = label[:, :, np.newaxis]
+            # if input.ndim == 2:
+            #     input = input[:, :, np.newaxis]
 
             data = {'input': input, 'label': label}
 
