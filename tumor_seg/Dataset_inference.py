@@ -3,12 +3,14 @@ import numpy as np
 import torch
 from PIL import Image
 from .data_utils import RGB2GH, H_RGB
+from patch_gen.slide_utils import correct_background
 
 class Dataset(torch.utils.data.Dataset):
 
-    def __init__(self, slide, xy_coord, size_on_slide, patch_size, mean=0.5, std=0.5, input_type='RGB'):
+    def __init__(self, slide, white, xy_coord, size_on_slide, patch_size, mean=0.5, std=0.5, input_type='RGB'):
 
         self.slide = slide
+        self.white = white
         self.xy_coord = xy_coord
         self.slide_level = 0
         self.patch_size = patch_size
@@ -40,8 +42,8 @@ class Dataset(torch.utils.data.Dataset):
         # input.convert('RGB').save(os.path.join(self.data_dir, f'S-LC0027-MET_{coord[0]}_{coord[1]}_input_90.jpg'), quality=90)
         input = np.array(input.convert('RGB'))
 
-        # Blankfield Correction, 밝은 영역 평균을 구해 그걸로 255로 맞추고 scale 다시 맞추는 작업
-        # input = correct_background(input)
+        # blankfield correction
+        input = correct_background(input, self.white, ratio = 0.01)
 
         input = input/255.0
         input = input.astype(np.float32)
