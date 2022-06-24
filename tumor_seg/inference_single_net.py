@@ -5,10 +5,12 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import torch
-from model import *
-from data_utils import *
 import time
 import argparse
+
+from model import *
+from data_utils import *
+from net_utils import *
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
@@ -38,10 +40,11 @@ def parse_arguments():
 
 class Dataset(torch.utils.data.Dataset):
 
-    def __init__(self, data_dir, transform=None, input_type = 'RGB'):
+    def __init__(self, data_dir, mean=0.5, std=0.5, input_type = 'RGB'):
         self.data_dir = data_dir
-        self.transform = transform
         self.input_type = input_type
+        self.mean = mean
+        self.std = std
 
         img_list = sorted([i for i in os.listdir(self.data_dir) if 'input' in i])
 
@@ -55,73 +58,36 @@ class Dataset(torch.utils.data.Dataset):
         input = Image.open(os.path.join(self.data_dir, self.img_list[index]))
         input = np.array(input)
 
-        # Blankfield Correction, 밝은 영역 평균을 구해 그걸로 255로 맞추고 scale 다시 맞추는 작업
-        # input = correct_background(input)
         input = input/255.0
         input = input.astype(np.float32)
 
         data = {}
-        if self.input_type == 'GH':
+        if self.input_type != 'RGB':
             img = input.copy()
-            data['img']= img
-
-            input = RGB2GH(input)
+            data['img'] = img
+            if self.input_type == 'GH':
+                input = RGB2GH(input)
+            elif self.input_type == 'H_RGB':
+                input = H_RGB(input)
 
         if input.ndim == 2:
             input = input[:, :, np.newaxis]
+
+        input = (input - self.mean) / self.std
+        input = input.transpose((2, 0, 1)).astype(np.float32)
+        input = torch.from_numpy(input)
 
         data['id'] = self.img_list[index].split('_input')[0]
         data['input'] = input
         # data = {'id': self.img_list[index],  'input': input}
 
-        if self.transform:
-            data = self.transform(data)
-
         return data
-
-class ToTensor(object):
-    def __call__(self, data):
-        input = data['input']
-
-        input = input.transpose((2, 0, 1)).astype(np.float32)
-        data['input'] = torch.from_numpy(input)
-
-        return data
-
-class Normalization(object):
-    def __init__(self, mean=0.5, std=0.5):
-        self.mean = mean
-        self.std = std
-
-    def __call__(self, data):
-        input = data['input']
-        input = (input - self.mean) / self.std
-        data['input'] = input
-        return data
-
-def net_test_load(model_path, net, device=None):
-    if device != None:
-        dict_model = torch.load(model_path, map_location=device)
-    else:
-        dict_model = torch.load(model_path, map_location='cpu')
-
-    k = list(dict_model['net'].keys())[0]
-    if "module" in k:
-        dict_model['net'] = remove_module(dict_model)
-    net.load_state_dict(dict_model['net'])
-
-    print('     model: ', model_path)
-    return net
 
 def sigmoid(z):
     return 1/(1+np.e**(-(z.astype('float64')-0.5)))
 
 def make_heatmap(output):
-    # output = output-output.min()
-    # output = output/output.max()
-
-    output = sigmoid(output)
-    # output = np.clip(output, 0, 1).astype('float32')
+    # output = sigmoid(output)
     heatmap = cm.jet(output)[:, :, :3]
     return heatmap.astype('float32')
 
@@ -139,7 +105,7 @@ if __name__ == '__main__':
 
     if len(rank) != 1:
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        net = UNet(input_type, DataParallel=True)
+        net = UNet(input_type)
         net = net_test_load(model_path, net)
         net = torch.nn.DataParallel(net, device_ids=rank)
         net = net.to(device)
@@ -167,7 +133,6 @@ if __name__ == '__main__':
     fn_norm = lambda x : (x-x.min())/(x.max()-x.min())
     fn_classifier = lambda x : 1.0 * (x > 0.5)
 
-    # save_dir = args.save_dir
     batch_size = args.batch_size
     model_name = args.model_name
     # model_name = '06_baseline'
@@ -179,14 +144,8 @@ if __name__ == '__main__':
         
         start_time = time.time()
         data_dir = os.path.join(patch_dir, slide_id, f'{patch_mag}x_{patch_size}')
-        # mask_save_dir = f'{save_dir}/slide/{slide_id}'
-        # plot_save_dir = mask_save_dir + '/plot'
 
-        # try: os.makedirs(mask_save_dir)
-        # except: pass
-        
-        transform = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
-        dataset = Dataset(data_dir, transform, input_type)
+        dataset = Dataset(data_dir, input_type)
         loader = DataLoader(dataset, batch_size, shuffle=False)
 
         with torch.no_grad(): 
@@ -201,10 +160,8 @@ if __name__ == '__main__':
                 img_id = data['id']
                 output = net(input)
 
-                # pred = np.squeeze(fn_tonumpy(fn_classifier(output)), axis=-1)
                 output = np.squeeze(fn_tonumpy(output), axis=-1)
                 pred = fn_classifier(output)
-                # pred = fn_classifier(output).astype('float32')
 
                 if input_type == 'GH':
                     input = img.to('cpu').detach().numpy()
