@@ -50,6 +50,8 @@ def parse_arguments():
 
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--n_epoch', type=int, default=100)
+
+    parser.add_argument('--log_img', type=bool, default = False)
     
     args = parser.parse_args()
     print('')
@@ -70,17 +72,32 @@ def train(args, data_loader, ckpt_dir, log_dir):
     loader_train, loader_val = data_loader
     start_epoch = 0
 
+    # model architecture
     if args.model_arch == 'UNet':
-        net = UNet(input_type, n_cls, selective=args.selective)
+        net = UNet(input_type, n_cls, selective=args.selective) # for CE loss, output (N, C, H, W)
     elif args.model_arch == 'UNet_B':
-        net = UNet_B(input_type) # for BCE loss, output (N, 1, H, W)
+        net = UNet_B(input_type, selective=args.selective) # for BCE loss, output (N, H, W)
+    
+    # loss
+    if args.loss == 'BCElogit':
+        loss_A = torch.nn.BCEWithLogitsLoss() # (N, D) 
+    elif args.loss == 'CE':
+        loss_A = torch.nn.CrossEntropyLoss() # (N, C, D) one hot encoding is required
 
+    if args.selective:
+        if 'BCE' in args.loss:
+            loss_S = calc_selective_risk_image_b
+        else: 
+            loss_S = calc_selective_risk_image
+
+    # optimizer
     if args.optim == 'Adam':
         optim = torch.optim.Adam(net.parameters(), lr=lr, weight_decay=args.w_decay)
     elif args.optim == 'SGD':
         optim = torch.optim.SGD(net.parameters(), lr=lr, momentum=args.momentum, weight_decay=args.w_decay) 
         # SelectiveNet 논문 momentum 0.9 weight decay 5e-4 (clssification)
 
+    # learning rate scheduler
     if args.lr_sche == 'StepLR':
         scheduler = torch.optim.lr_scheduler.StepLR(optim, step_size=args.patience, gamma=args.factor)
     elif args.lr_sche == 'ReduceLR':
@@ -88,6 +105,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
     elif args.lr_sche == 'CosineAnnealingLR':
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = args.patience, eta_min = args.lr_min)
 
+    # a single gpu or multiple gpus
     if len(rank) != 1: # gpu 여러개 쓰고 싶을때, DP 
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     elif len(rank) == 1: # 0번 말고 다른 gpu도 single로 쓰고 싶을때
@@ -118,21 +136,18 @@ def train(args, data_loader, ckpt_dir, log_dir):
     if len(rank) > 1:
         net = torch.nn.DataParallel(net, device_ids=rank)
         net = net.cuda()
-  
-    if args.loss == 'BCElogit':
-        loss_A = torch.nn.BCEWithLogitsLoss() # (N, D) 
-    elif args.loss == 'CE':
-        loss_A = torch.nn.CrossEntropyLoss() # (N, C, D) one hot encoding is required
 
-    if args.selective:
-        loss_S = calc_selective_risk_image
-
+    # converting functions
     fn_denorm = lambda x, mean, std : (x*std) + mean # input -> [0, 1]로 다시 복원하기 위해
-    fn_classifier = lambda x : 1.0 * (x > 0.5)
+    # fn_classifier = lambda x : 1.0 * (x > 0.5)
+    fn_classifier = lambda x : 1.0 * (x > 0)
 
+
+    # logs
     writer_train = SummaryWriter(log_dir = os.path.join(log_dir, 'train'))
     writer_val = SummaryWriter(log_dir = os.path.join(log_dir, 'valid'))
 
+    # measuring class
     evaluator = Evaluator(num_class=n_cls, selective=args.selective)
 
     for epoch in range(start_epoch+1,start_epoch+num_epoch +1):
@@ -175,7 +190,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
                 loss = aux_loss + select_loss
                 
             else:
-                output = net(inputs)
+                output = net(inputs) # (N, 2, H, W) or (N, H, W)
                 loss = loss_A(output, label)
 
             # backward
@@ -183,7 +198,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
             loss.backward() # gradient backpropagation
             optim.step() # backpropa 된 gradient를 이용해서 각 layer의 parameters update
             
-            # inputs = fn_tonumpy(fn_denorm(inputs,0.5,0.5)) # (N, C, H, W) ~ [mean: 0.5, std: 0.5] -> (N, H, W, C) ~ [0, 1]
+            inputs = fn_denorm(inputs, mean=0.5, std=0.5).to('cpu').detach().numpy().transpose(0, 2, 3, 1)
             label = label.to('cpu').detach().numpy()
 
             if len(output.size()) == 4:
@@ -197,8 +212,12 @@ def train(args, data_loader, ckpt_dir, log_dir):
             pred = pred.astype('uint8')
      
             if args.selective:
-                _, selection = torch.max(selection, dim=1)
-                evaluator.add_batch(label, pred, selection=selection.to('cpu').detach().numpy())
+                if len(selection.size()) == 4:
+                    _, selection = torch.max(selection, dim=1)
+                elif len(selection.size()) == 3:
+                    selection = fn_classifier(selection)
+                selection = selection.to('cpu').detach().numpy().astype('unit8')
+                evaluator.add_batch(label, pred, selection=selection)
                 tr_total += label.size
                 reject = label.size - selection.sum().item()
                 tr_total_reject += reject
@@ -227,6 +246,17 @@ def train(args, data_loader, ckpt_dir, log_dir):
             writer_train.add_scalar('selection loss', np.mean(tr_sel_loss_arr), epoch)
             writer_train.add_scalar('rejection ratio', tr_total_reject/tr_total, epoch)
 
+        # print(inputs[:5, :, :, :].shape)
+        # print(np.expand_dims(label[:5, :, :], axis = -1).shape)
+        # print(np.expand_dims(pred[:5, :, :], axis = -1).shape)
+        if args.log_img:
+            writer_train.add_images('input', inputs[:5, :, :, :], epoch, dataformats='NHWC')
+            writer_train.add_images('label', np.expand_dims(label[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
+            writer_train.add_images('pred', np.expand_dims(pred[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
+            if args.selective:
+                writer_train.add_images('selection', np.expand_dims(selection[:5, :, :]*255, axis = -1), epoch, dataformats='NHWC')
+
+        
         # validation
         with torch.no_grad(): 
             net.eval()
@@ -234,10 +264,11 @@ def train(args, data_loader, ckpt_dir, log_dir):
             for data in tqdm(loader_val, total = len(loader_val), desc = 'valid'):
                 # forward
                 inputs = data['input'].to(device) # (N, C, H, W)
-                label = data['label'] # (N, H, W), torch.int64
+                label = data['label'] # (N, H, W), torch.int64 (Long)
 
                 if 'BCE' in args.loss:
                     label = label.type(torch.FloatTensor) # torch.flaot32
+                
                 label = label.to(device) # (N, H, W)
                 
                 if args.selective:
@@ -253,12 +284,12 @@ def train(args, data_loader, ckpt_dir, log_dir):
                     output = net(inputs)
                     loss = loss_A(output, label)
 
-                # inputs = fn_tonumpy(fn_denorm(inputs, mean=0.5, std=0.5))
+                inputs = fn_denorm(inputs, mean=0.5, std=0.5).to('cpu').detach().numpy().transpose(0, 2, 3, 1)
                 label = label.to('cpu').detach().numpy()
 
                 if len(output.size()) == 4:
-                        output = output.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
-                        pred = np.argmax(output, axis=-1) # (N, H, W, C) -> (N, H, W), [0.2, 0.7, 0.1] -> [1] 
+                    output = output.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+                    pred = np.argmax(output, axis=-1) # (N, H, W, C) -> (N, H, W), [0.2, 0.7, 0.1] -> [1] 
                 elif len(output.size()) == 3:
                     output = output.to('cpu').detach().numpy()
                     pred = fn_classifier(output) # binary class 0.4 -> 0, 0.6 -> 1
@@ -267,8 +298,12 @@ def train(args, data_loader, ckpt_dir, log_dir):
                 pred = pred.astype('uint8')
 
                 if args.selective:
-                    _, selection = torch.max(selection, dim=1)
-                    evaluator.add_batch(label, pred, selection=selection.to('cpu').detach().numpy())
+                    if len(selection.size()) == 4:
+                        _, selection = torch.max(selection, dim=1)
+                    elif len(selection.size()) == 3:
+                        selection = fn_classifier(selection)
+                    selection = selection.to('cpu').detach().numpy().astype('unit8')
+                    evaluator.add_batch(label, pred, selection=selection)
                     val_total += label.size
                     reject = label.size - selection.sum().item()
                     val_total_reject += reject
@@ -278,10 +313,14 @@ def train(args, data_loader, ckpt_dir, log_dir):
                 val_loss_arr += [loss.item()]
 
         val_acc = evaluator.get_Pixel_Accuracy()
-        evaluator.reset()
+        evaluator.reset()   
 
         writer_val.add_scalar('loss', np.mean(val_loss_arr), epoch)
         writer_val.add_scalar('accuracy', val_acc, epoch)
+
+        # writer_val.add_images('input', inputs[:5, :, :, :], epoch, dataformats='NHWC')
+        # writer_val.add_images('label', np.expand_dims(label[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
+        # writer_val.add_images('pred', np.expand_dims(pred[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
 
         if args.selective:
             writer_val.add_scalar('aux loss', np.mean(val_aux_loss_arr), epoch)
