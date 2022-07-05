@@ -52,11 +52,14 @@ def parse_arguments():
     parser.add_argument('--model_dir', type=str, 
                         default='*/model', help='network ckpt (.pth) directory')
     parser.add_argument('--model_arch', type=str, nargs = '+',
-                        default = ['UNet'], choices=['UNet'])
+                        default = ['UNet_B'], choices=['UNet_B'])
+    parser.add_argument('--selective', type=bool, default = False)
+    parser.add_argument('--output_dim', type=str, default = 'NHW', choices=['NCHW', 'NHW'])
     parser.add_argument('--ens_scale', type=str,
                         default = 'None', choices=['None', 'clip', 'sigmoid', 'minmax'])
                 
     parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local gpu ids')
+    parser.add_argument('--info_print', type=bool, default = False)
 
     parser.add_argument('--save_dir', action="store", type=str,
                         default='/mnt/ssd1/biomarker/c-met/final_output')
@@ -105,14 +108,19 @@ def make_wsi_mask_(slide, level, slide_patch_ratio, slide_mask_ratio, pred_dir):
 
     return mask
 
-def make_wsi_mask(slide, level, patch_size, slide_patch_ratio, slide_mask_ratio, pred_list, x_coord, y_coord):
+def make_wsi_mask(pred_list, x_coord, y_coord, mask_size, step_on_slide, slide_mask_ratio, selection = []):
     """
     make a wsi-level mask with a list of binary prediction 
     """
-    width, height = slide.level_dimensions[level]
 
-    mask = np.zeros((height, width))
-    mask_step = patch_size*slide_patch_ratio//slide_mask_ratio
+    width, height = mask_size
+
+    mask_step = step_on_slide//slide_mask_ratio
+
+    if len(selection) == 0:
+        mask = np.zeros((height, width))
+    elif len(selection) != 0:
+        mask = np.zeros((2, height, width))
 
     # print(mask.shape)
     # print(mask_step)
@@ -121,28 +129,34 @@ def make_wsi_mask(slide, level, patch_size, slide_patch_ratio, slide_mask_ratio,
         raw_x = x_coord[i]
         raw_y = y_coord[i]
 
-        x = raw_x//slide_mask_ratio
-        y = raw_y//slide_mask_ratio
+        x = int(raw_x)//slide_mask_ratio
+        y = int(raw_y)//slide_mask_ratio
 
-        img = pred_list[i]
-        img = cv2.resize(img, (mask_step, mask_step), cv2.INTER_AREA)
+        tumor_mask_i = cv2.resize(pred_list[i], (mask_step, mask_step), cv2.INTER_AREA)
 
         # print(i, raw_x, raw_y, x, y, x+mask_step, y+mask_step)
-        try: mask[y:y+mask_step, x:x+mask_step] += img
-        except: pass
+        
+        if len(selection) == 0:
+            try: mask[y:y+mask_step, x:x+mask_step] += tumor_mask_i
+            except: pass
 
-    mask = mask.astype('uint8')
+        elif len(selection) != 0:
+            select_i = cv2.resize(selection[i], (mask_step, mask_step), cv2.INTER_AREA)
+            try: mask[:, y:y+mask_step, x:x+mask_step] += np.concatenate([np.expand_dims(tumor_mask_i*select_i, axis=0), np.expand_dims(1-select_i, axis=0)], axis =0)
+            except: pass
+
+
+    mask = np.uint8(mask)
     # return mask, cv2.medianBlur(mask, 15), cv2.medianBlur(mask, 61)
-
-    kernel_size = 61
-    # kernel_size = 15
-    mask = cv2.medianBlur(mask, kernel_size)
 
     return mask
     
-def make_wsi_xml(mask, slide_mask_ratio, color = "-65536", ano_class = "Pattern5"):
+def make_wsi_xml(mask_list, color_list, pattern_list, slide_mask_ratio):
 
-    contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    contours_list, hierarchy_list = [], []
+    for mask in mask_list:
+        contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours_list.append(contours), hierarchy_list.append(hierarchy)
 
     total = Element("object-stream")
     Annotations = Element("Annotations")
@@ -165,46 +179,50 @@ def make_wsi_xml(mask, slide_mask_ratio, color = "-65536", ano_class = "Pattern5
     Comment.text = ""
     Annotations.append(Comment)
 
-    Annotation_list = []
-
     """
     <Annotation class="Pattern5" type="Area" color="-65536">
     """
+    for i in range(len(mask_list)):
+        contours = contours_list[i]
+        hierarchy = hierarchy_list[i]
+        pattern = pattern_list[i]
+        color = color_list[i]
 
-    for j, contour in enumerate(contours):
-        # [이전 윤곽선, 다음 윤곽선, 내곽 윤곽선, 외곽 윤곽선]
-        if hierarchy[0][j][3] == -1: #외곽선일 경우
-            Annotation = Element("Annotation")
-            Annotation.attrib["class"] = ano_class
-            Annotation.attrib["type"] = "Area"
-            Annotation.attrib["color"] = color
+        Annotation_list = []
+        for j, contour in enumerate(contours):
+            # [이전 윤곽선, 다음 윤곽선, 내곽 윤곽선, 외곽 윤곽선]
+            if hierarchy[0][j][3] == -1: #외곽선일 경우
+                Annotation = Element("Annotation")
+                Annotation.attrib["class"] = pattern
+                Annotation.attrib["type"] = "Area"
+                Annotation.attrib["color"] = color
 
-            Memo = Element("Memo")
-            Memo.text = ""
-            Annotation.append(Memo)
-        else:
-            Annotation_list.append(0)
-            Annotation = Annotation_list[hierarchy[0][j][3]]
+                Memo = Element("Memo")
+                Memo.text = ""
+                Annotation.append(Memo)
+            else:
+                Annotation_list.append(0)
+                Annotation = Annotation_list[hierarchy[0][j][3]]
 
-        Coordinates = Element("Coordinates")
+            Coordinates = Element("Coordinates")
 
-        for points in range(contour.shape[0]):
-            point_x, point_y = contour[points][0]
-            SubElement(Coordinates, "Coordinate", x=str(point_x*(slide_mask_ratio)), y=str(point_y*(slide_mask_ratio)))
+            for points in range(contour.shape[0]):
+                point_x, point_y = contour[points][0]
+                SubElement(Coordinates, "Coordinate", x=str(point_x*(slide_mask_ratio)), y=str(point_y*(slide_mask_ratio)))
 
-        try:
-            Annotation.append(Coordinates)
-        except:
-            pass
+            try:
+                Annotation.append(Coordinates)
+            except:
+                pass
 
-        if hierarchy[0][j][3] == -1:
-            Annotation_list.append(Annotation)
-        else:
-            Annotation_list[hierarchy[0][j][3]] = Annotation
+            if hierarchy[0][j][3] == -1:
+                Annotation_list.append(Annotation)
+            else:
+                Annotation_list[hierarchy[0][j][3]] = Annotation
 
-    for Anno_candidate in Annotation_list:
-        if Anno_candidate:
-            Annotations.append(Anno_candidate)
+        for Anno_candidate in Annotation_list:
+            if Anno_candidate:
+                Annotations.append(Anno_candidate)
 
     total.append(Annotations)
     return total
@@ -213,7 +231,8 @@ def main(args, slide_path, ROI_path):
 
     total_time = 0
 
-    print("Patch Loader...")
+    if args.info_print:
+        print("Patch Loader...")
 
     """
     Tissue Mask
@@ -258,6 +277,8 @@ def main(args, slide_path, ROI_path):
     patch_mag = args.patch_mag
     patch_size = args.patch_size
     patch_stride = args.patch_stride
+    batch_size = args.batch_size
+    num_workers = args.num_workers
     slide_patch_ratio = slide_mag//patch_mag
 
     size_on_slide = int(patch_size*slide_patch_ratio)
@@ -284,35 +305,38 @@ def main(args, slide_path, ROI_path):
         cv2.imwrite(os.path.join(save_dir, f'{slide_name}_x{patch_mag}_{patch_size}_num-{len(xy_coord)}.jpg'), slide_)
 
     test_set = Dataset(slide=slide, white=white, xy_coord=xy_coord, size_on_slide = size_on_slide, patch_size = patch_size)
-    test_loader = DataLoader(test_set, batch_size=args.batch_size, num_workers=args.num_workers, shuffle=False, pin_memory=True, drop_last=False)
+    test_loader = DataLoader(test_set, batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=True, drop_last=False)
 
     end_time = time.time()
     patch_loader_time += (end_time - start_time)
 
     total_time += patch_loader_time
 
-    print(f'    slide mag: {slide_mag}')
-    print(f'    slide mpp: {slide_mpp}')
-    print(f'    slide/tissue_mask ratio: {slide_mask_ratio}')
-    print(f'    patch mag: {patch_mag}')
-    print(f'    patch size: {patch_size}')
-    print(f'    patch stride: {patch_stride}')
-    print(f'    slide/patch ratio: {slide_patch_ratio}') 
-    print(f'    # of patch: {len(xy_coord)}')
-    print(f'    batch size: {args.batch_size}')
-    print(f'    num workers: {args.num_workers}')
-    print(f'    Patch Loader Time: {round(patch_loader_time, 2)} sec')
+    if args.info_print:
+        print(f'    slide mag: {slide_mag}')
+        print(f'    slide mpp: {slide_mpp}')
+        print(f'    slide/tissue_mask ratio: {slide_mask_ratio}')
+        print(f'    patch mag: {patch_mag}')
+        print(f'    patch size: {patch_size}')
+        print(f'    patch stride: {patch_stride}')
+        print(f'    slide/patch ratio: {slide_patch_ratio}') 
+        print(f'    # of patch: {len(xy_coord)}')
+        print(f'    batch size: {batch_size}')
+        print(f'    num workers: {num_workers}')
+        print(f'    Patch Loader Time: {round(patch_loader_time, 2)} sec')
 
     """
     Load Tumor Segmentation Model
     """
 
-    print("Load Tumor Segmentation Model...")
+    if args.info_print:
+        print("Load Tumor Segmentation Model...")
 
     rank = args.local_rank
     model_dir = args.model_dir
     input_type = args.input_type
     model_arch = args.model_arch # list
+    selective = args.selective
 
     load_model_time = 0
     start_time = time.time() 
@@ -323,25 +347,51 @@ def main(args, slide_path, ROI_path):
         model_arch_ = model_arch[0]
         model_arch = [model_arch_ for _ in range(len(model_list))]
 
-    model_dict = {'UNet': UNet}
+    model_dict = {'UNet_B': UNet_B}
     nets = []
 
     for i in range(len(model_list)):
  
         model_path = os.path.join(model_dir, model_list[i])
-        print(f'    {model_path} - {model_arch[i]}')
+        if args.info_print:
+            print(f'    {model_path} - {model_arch[i]} / SelectiveNet: {selective}')
 
-        if len(rank) != 1:
+        net = model_dict[model_arch[i]](input_type, selective=selective)
+ 
+        # define a device 
+        if len(rank) != 1: # gpu 여러개 쓰고 싶을때, DP 
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            net = model_dict[model_arch[i]](input_type)
-            net = net_test_load(model_path, net)
+        elif len(rank) == 1: # 0번 말고 다른 gpu도 single로 쓰고 싶을때
+            device = torch.device(f'cuda:{rank}')
+            net = net.to(device)
+
+        # net = net_test_load(model_path, net, device=device)
+        if len(rank) != 1:
+            ckpt = torch.load(model_path, map_location='cpu')
+        elif len(rank) == 1:
+            ckpt = torch.load(model_path, map_location=device)
+
+        try: ckpt['net'] = remove_module(ckpt)
+        except: pass
+
+        net.load_state_dict(ckpt['net'])
+
+        # using multi-gpu via DataParallel
+        if len(rank) > 1:
             net = torch.nn.DataParallel(net, device_ids=rank)
-            net = net.to(device) 
-        else:
-            # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
-            device = torch.device(f'cuda:{rank[0]}')
-            net = model_dict[model_arch[i]](input_type).to(device)
-            net = net_test_load(model_path, net, device=device)
+            net = net.cuda() # == net.to(device) 
+
+        # if len(rank) != 1:
+        #     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        #     net = model_dict[model_arch[i]](input_type, n_cls=2, selective=args.selective)
+        #     net = net_test_load(model_path, net)
+        #     net = torch.nn.DataParallel(net, device_ids=rank)
+        #     net = net.to(device) 
+        # else:
+        #     # single gpu -> device map location으로 불러와야 gpu 0을 안 씀
+        #     device = torch.device(f'cuda:{rank[0]}')
+        #     net = model_dict[model_arch[i]](input_type).to(device)
+        #     net = net_test_load(model_path, net, device=device)
             
         net.train(False)
         nets.append(net)
@@ -356,22 +406,31 @@ def main(args, slide_path, ROI_path):
     load_model_time += (end_time - start_time)
     total_time += load_model_time
 
-    print(f'    input type: {input_type}')
-    print(f'    local ranks: {rank}')
-    print(f'    device: {device}')
-    print(f'    Model Loading Time: {round(load_model_time, 2)} sec')
+    if args.info_print:
+        print(f'    input type: {input_type}')
+        print(f'    local ranks: {rank}')
+        print(f'    device: {device}')
+        print(f'    Model Loading Time: {round(load_model_time, 2)} sec')
 
     """
     Tumor Prediction and IHC Analyzer
     """
 
-    print("Tumor Prediction...")
+    if args.info_print:
+        print("Tumor Prediction...")
 
     model_output = []
+    model_selection = []
     x_coord, y_coord = [], []
 
-    fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
+    NCHW_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+    NHW_tonumpy = lambda x: x.to('cpu').detach().numpy()
     fn_denorm = lambda x, mean, std : (x*std) + mean
+
+    if args.output_dim == 'NCHW':
+        fn_convert = lambda x: np.squeeze(NCHW_tonumpy(x), axis=-1)
+    elif args.output_dim == 'NHW':
+        fn_convert = lambda x: NHW_tonumpy(x)
 
     # ensemble
     ensemble_scale = args.ens_scale
@@ -379,40 +438,63 @@ def main(args, slide_path, ROI_path):
     fn_sigmoid = lambda x : 1/(1+ np.exp(-(x.astype('float64')-0.5)))
     fn_clip = lambda x: np.clip(x, 0, 1)
 
-    fn_classifier = lambda x : 1.0 * (x > 0.5)
+    # fn_classifier = lambda x : 1.0 * (x > 0.5)
+    fn_classifier = lambda x : 1.0 * (x > 0)
 
     model_inf_time = 0
     start_time = time.time() 
 
+    if selective:
+        total, total_reject = 0, 0
     with torch.no_grad():
         # net.eval()
 
         for data in tqdm(test_loader, total = len(test_loader), desc = '   model inference'):
             input = data['input'].to(device)
             x, y = data['x'], data['y']
-            
+
+            # single model
             if len(nets) == 1:
-                output = nets[0](input)
-                output = np.squeeze(fn_tonumpy(output), axis = -1)
+                if not selective:
+                    output = nets[0](input) # (N, H, W) or (N, 2, H, W)
+                else:
+                    output, selection, _ = nets[0](input) # (N, H, W) or (N, 2, H ,W)
+                output = fn_convert(output)
+
+            # ensemble, selective 불가
             else:
                 outputs = []
                 for net in nets:
                     output = net(input)
                     if ensemble_scale == 'None':
-                        outputs.append(np.squeeze(fn_tonumpy(output), axis = -1))
+                        outputs.append(fn_convert(output))
                     elif ensemble_scale == 'clip':
-                        outputs.append(np.squeeze(fn_tonumpy(fn_clip(output)), axis = -1))
+                        outputs.append(fn_convert(fn_clip(output)))
                     elif ensemble_scale == 'minmax':
-                        outputs.append(np.squeeze(fn_tonumpy(fn_scale_minmax(output)), axis = -1))
+                        outputs.append(fn_convert(fn_scale_minmax(output)))
                     elif ensemble_scale == 'sigmoid':
-                        outputs.append(np.squeeze(fn_tonumpy(fn_sigmoid(output)), axis = -1))
+                        outputs.append(fn_convert(fn_sigmoid(output)))
                 output = np.mean(np.asarray(outputs), axis = 0)
                 del outputs
+
+            if selective:
+                if len(selection.size()) == 4:
+                    _, selection = torch.max(selection, dim=1)
+                elif len(selection.size()) == 3:
+                    selection = fn_classifier(selection)
+                selection = selection.to('cpu').detach().numpy().astype('uint8')
+                total += output.size
+                reject = output.size - selection.sum().item()
+                total_reject += reject
 
             # input = fn_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
             
             pred = fn_classifier(output)
-            model_output.extend(np.uint8(pred*255))
+            model_output.extend(np.uint8(pred))
+
+            if selective:
+                model_selection.extend(np.uint8(selection))
+                del selection
 
             x_coord.extend(x)
             y_coord.extend(y)
@@ -433,17 +515,19 @@ def main(args, slide_path, ROI_path):
 
     model_inf_time += (end_time - start_time)
     total_time += model_inf_time
+    if selective:
+        print(f'    rejection ratio: {round(total_reject/total, 3)}')
 
-    print(f'    Model Inference Time: {round(model_inf_time, 2)} sec')
+    if args.info_print:
+        print(f'    Model Inference Time: {round(model_inf_time, 2)} sec')
 
     """
     Mask wsi-level mask and Save mask as .xml
     """
-    print("Predictied Tumor Region as .xml...")
+    if args.info_print:
+        print("Predictied Tumor Region as .xml...")
 
-    tumor_color = "-65536"
-    tumor_class = "Pattern5"
-
+    
     wsi_mask_time = 0
     start_time = time.time() 
 
@@ -451,21 +535,45 @@ def main(args, slide_path, ROI_path):
     slide_mask_ratio = round(slide.level_downsamples[mask_level]) 
     # 위의 tissue mask에 대한 slide_mask_ratio는 32 or 64, 여기선 4.. 
 
-    tumor_mask = make_wsi_mask(slide, mask_level, patch_size, slide_patch_ratio, slide_mask_ratio, pred_list = model_output, x_coord=x_coord, y_coord=y_coord)
+    mask_size = slide.level_dimensions[mask_level] # (width, height)
+
+    mask = make_wsi_mask(model_output, x_coord, y_coord, mask_size, step_on_slide, slide_mask_ratio, selection = model_selection)
     # mask, mask_mb_15, mask_mb_61 = make_wsi_mask(slide, mask_level, patch_size, slide_patch_ratio, slide_mask_ratio, pred_list = model_output, x_coord=x_coord, y_coord=y_coord)
+
+    kernel_size = 61 # MRAN 코드에서는 high resolution에서 사용, 15 for low resol
+
+    if not selective: 
+        tumor_mask = mask
+        tumor_mask = cv2.medianBlur(tumor_mask, kernel_size)
+        mask_list = [tumor_mask]
+    elif selective:
+        tumor_mask = mask[0, :, :]
+        tumor_mask = cv2.medianBlur(tumor_mask, kernel_size)
+        reject_mask = mask[1, :, :]
+        reject_mask = cv2.medianBlur(reject_mask, 15)
+
+        mask_list = [tumor_mask, reject_mask]
+
     end_time = time.time()
     wsi_mask_time += (end_time - start_time)
     total_time += wsi_mask_time
 
-    tumor_mask_ = cv2.resize(tumor_mask, slide.level_dimensions[-1], interpolation=cv2.INTER_AREA)
-
-    print(f'    slide/tumor_mask ratio: {slide_mask_ratio}')
-    print(f'    Making WSI-level Mask Time: {round(wsi_mask_time, 2)} sec')
-
-    cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask.png'), tumor_mask_)
-    # cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask_median_blur_15.png'), mask_mb_15)
-    # cv2.imwrite(os.path.join(save_dir, f'{slide_name}_wsi-level_tumor_mask_median_blur_61.png'), mask_mb_61)
+    if args.info_print:
+        print(f'    mask size: {mask_size}')
+        print(f'    slide/tumor_mask ratio: {slide_mask_ratio}')
+        print(f'    mask step: {int(step_on_slide*slide_mask_ratio)}')
+        print(f'    Making WSI-level Mask Time: {round(wsi_mask_time, 2)} sec')
     
+    tumor_color = "-65536"
+    tumor_pattern = "Pattern5"
+    pattern_list = [tumor_pattern]
+    color_list = [tumor_color]
+    
+    if selective:
+        reject_color = "-7667457"
+        reject_pattern = "Uncertain"
+        pattern_list.append(reject_pattern)
+        color_list.append(reject_color)
 
     mask_xml_time = 0
     start_time = time.time() 
@@ -473,14 +581,16 @@ def main(args, slide_path, ROI_path):
     xml_save_dir = os.path.join(save_dir, 'xml')
     os.makedirs(xml_save_dir, exist_ok = True)
 
-    xml = make_wsi_xml(tumor_mask, slide_mask_ratio, color = tumor_color, ano_class = tumor_class)
+    xml = make_wsi_xml(mask_list, color_list, pattern_list, slide_mask_ratio)
+
     ET.ElementTree(xml).write(os.path.join(xml_save_dir, f'{slide_name}.xml'))
 
     end_time = time.time()
     mask_xml_time += (end_time - start_time)
     total_time += mask_xml_time
-    print(f'    WSI Mask to .xml Time: {round(mask_xml_time, 2)} sec')
-    print(f'    Total Elapsed Time: {round(total_time, 0)}s')
+    if args.info_print:
+        print(f'    WSI Mask to .xml Time: {round(mask_xml_time, 2)} sec')
+        print(f'    Total Elapsed Time: {round(total_time, 0)}s')
     m, s = divmod(total_time, 60)
     print(f'    Total Elapsed Time: {m}m {round(s, 0)}s')
     print('')
@@ -503,11 +613,11 @@ if __name__ == "__main__":
         ROI_path = os.path.join(args.ROI_dir, ROI_file)
         main(args, slide_path, ROI_path)
     else:
-        issues = [118]
-        slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
+        # issues = [118]
+        # slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
         
-        # target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
-        # slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
+        target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
+        slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
 
         total_time = 0
         for i, (slide_file) in enumerate(slide_list):
@@ -525,7 +635,6 @@ if __name__ == "__main__":
         h, m = divmod(m, 60)
         print(f'    Total Elapsed Time: {h}h {m}m {round(s, 2)}s')
     
-
     signal.signal(signal.SIGINT, exit_gracefully)  # 인터럽트 발생시
     signal.signal(signal.SIGHUP, exit_gracefully)  # 터미널과의 연결이 끊겼을 시
     signal.signal(signal.SIGTERM, exit_gracefully)  # Soft Kill
