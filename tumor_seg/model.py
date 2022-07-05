@@ -92,7 +92,7 @@ class UNet_B(nn.Module):
         dec1_2 = self.decoder_layer_1_2(unpool1)
         dec1_1 = self.decoder_layer_1_1(dec1_2)
 
-        dec1_1 = dec1_1.clone().detach()
+        # dec1_1 = dec1_1.clone().detach() # 아... 이거때문에 안 됐던거냐......
         output = self.conv1x1(dec1_1)
 
         if self.selective:
@@ -100,7 +100,7 @@ class UNet_B(nn.Module):
             aux = self.conv_aux(dec1_1) # (N, 1, H, W)
             return torch.squeeze(output, 1), torch.squeeze(select, 1), torch.squeeze(aux, 1)
         else:
-            return torch.squeeze(output, 1) # (N, 1, H, W) -> (N, H, W) label shape
+            return torch.squeeze(output, 1) # (N, 1, H, W) -> (N, H, W) matching with the shape of label
 
 class UNet(nn.Module):
     def __init__(self, input_type = 'RGB', n_cls = 2, selective = False):
@@ -180,7 +180,7 @@ class UNet(nn.Module):
         dec1_2 = self.decoder_layer_1_2(unpool1)
         dec1_1 = self.decoder_layer_1_1(dec1_2)
 
-        dec1_1 = dec1_1.clone().detach()
+        # dec1_1 = dec1_1.clone().detach()
         output = self.conv1x1(dec1_1) # (N, C, H, W)
 
         if self.selective:
