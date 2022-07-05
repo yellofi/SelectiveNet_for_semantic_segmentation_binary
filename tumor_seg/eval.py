@@ -3,40 +3,51 @@ import os
 import numpy as np
 import torch
 from tqdm import tqdm
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from PIL import Image
 from matplotlib import cm
 import csv
 
 from data_utils import *
+from Dataset_sample import Dataset
 from Dataset_samsung import *
-from model import UNet
+from model import *
 from net_utils import *
-from compute_metric import *
+from compute_metric import Evaluator
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--data_dir', type=str, 
                         default = './data')
-    parser.add_argument('--model_path', type=str, 
-                        default='./model.pth', help='model weights and parameters')
-    parser.add_argument('--save_dir', type=str, 
-                        default='./output', help='saving results')
-
-    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='single gpu or DP')
 
     parser.add_argument('--test_fold', type = int, 
                         default = 1, help = 'which fold in 5-fold cv')
-    
     parser.add_argument('--data_type', type=str, default = 'samsung', 
                         help='sample or samsung')
 
+    parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--patch_mag', type=int, default = 200)
     parser.add_argument('--patch_size', type=int, default = 256)
+    parser.add_argument('--n_cls', type=int, default=2)
 
-    parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=16, help='Dataloader num_workers')
+
+    parser.add_argument('--model_dir', type=str, 
+                        default='*/model', help='network ckpt (.pth) directory')
+    parser.add_argument('--model_arch', type=str, nargs = '+',
+                        default = ['UNet_B'], choices=['UNet_B'])
+    parser.add_argument('--selective', type=bool, default = False)
+    parser.add_argument('--output_dim', type=str, default = 'NHW', choices=['NCHW', 'NHW'])
+    parser.add_argument('--ens_scale', type=str,
+                        default = 'None', choices=['None', 'clip', 'sigmoid', 'minmax'])
+
+    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local gpu ids')
+    parser.add_argument('--info_print', type=bool, default = False)
+
+    parser.add_argument('--save_dir', type=str, 
+                        default='./output', help='saving results')
     
     args = parser.parse_args()
     print('')
@@ -68,40 +79,71 @@ if __name__ == '__main__':
     data_dir = args.data_dir
     test_fold = args.test_fold
     input_type = args.input_type
-
     patch_mag = args.patch_mag
     patch_size = args.patch_size
+    batch_size = args.batch_size
+    num_workers = args.num_workers
 
-    print(f'Load Test Dataset ({test_fold}-fold)')
+    if args.info_print:
+        print(f'Load Test Dataset ({test_fold}-fold)')
 
     test_list = construct_test(data_dir, test_fold = test_fold)
     transform = transforms.Compose([Normalization(mean=0.5, std=0.5), ToTensor()])
-    dataset = SamsungDataset(data_dir = data_dir, data_list = test_list, transform = transform, input_type = input_type)
 
-    print("     # of test dataset", len(dataset))
+    if args.data_type == 'samsung':
+        test_set = SamsungDataset(data_dir = data_dir, data_list = test_list, transform = transform, input_type = input_type)
+    elif args.data_type == 'sample':
+        data_dir = f'{args.data_dir}/{args.fold}-fold'
+        test_set = Dataset(data_dir=os.path.join(data_dir, 'valid'), input_type=input_type, transform=transform) 
+
+
+    test_loader = DataLoader(test_set, batch_size=batch_size, num_workers=num_workers, shuffle=False, pin_memory=True, drop_last=False)
+
+    if args.info_print:
+        print(f'    patch mag: {patch_mag}')
+        print(f'    patch size: {patch_size}')
+        print(f'    batch size: {batch_size}')
+        print(f'    num workers: {num_workers}')
+        print("     # of test dataset", len(test_set))
+
+    """
+    Load Tumor Segmentation Model
+    """
+
+    if args.info_print:
+        print("Load Tumor Segmentation Model...")
 
     rank = args.local_rank
-    model_path = args.model_path
-    n_cls = args.n_cls
+    model_dir = args.model_dir
+    input_type = args.input_type
+    model_arch = args.model_arch
+    selective = args.selective 
 
-    print("Load Model...")
+    model_list = sorted([ckpt for ckpt in os.listdir(model_dir) if 'pth' in ckpt])
     
-    fn_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1)
-    fn_denorm = lambda x, mean, std : (x*std) + mean
-    fn_classifier = lambda x : 1.0 * (x > 0.5)
+    if len(model_list) != 1 and len(model_arch) == 1:
+        model_arch_ = model_arch[0]
+        model_arch = [model_arch_ for _ in range(len(model_list))]
 
-    if args.model_arch == 'UNet':
-        net = UNet(input_type, n_cls, selective=args.selective)
+    model_dict = {'UNet_B': UNet_B}
+    nets = []
+    
+    for i in range(len(model_list)):
  
+        model_path = os.path.join(model_dir, model_list[i])
+        if args.info_print:
+            print(f'    {model_path} - {model_arch[i]} / SelectiveNet: {selective}')
 
-    if len(rank) != 1: # gpu 여러개 쓰고 싶을때, DP 
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    elif len(rank) == 1: # 0번 말고 다른 gpu도 single로 쓰고 싶을때
-        device = torch.device(f'cuda:{rank}')
-        net = net.to(device)
+        net = model_dict[model_arch[i]](input_type, selective=selective)
+ 
+        # define a device 
+        if len(rank) != 1: # gpu 여러개 쓰고 싶을때, DP 
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        elif len(rank) == 1: # 0번 말고 다른 gpu도 single로 쓰고 싶을때
+            device = torch.device(f'cuda:{rank}')
+            net = net.to(device)
 
-    if not os.path.exists(model_path): 
-
+        # net = net_test_load(model_path, net, device=device)
         if len(rank) != 1:
             ckpt = torch.load(model_path, map_location='cpu')
         elif len(rank) == 1:
@@ -112,9 +154,13 @@ if __name__ == '__main__':
 
         net.load_state_dict(ckpt['net'])
 
-    if len(rank) > 1:
-        net = torch.nn.DataParallel(net, device_ids=rank)
-        net = net.cuda()
+        # using multi-gpu via DataParallel
+        if len(rank) > 1:
+            net = torch.nn.DataParallel(net, device_ids=rank)
+            net = net.cuda() # == net.to(device) 
+        
+        net.train(False)
+        nets.append(net)
 
     # if len(rank) != 1:
     #     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -128,60 +174,155 @@ if __name__ == '__main__':
     #     net = UNet(input_type).to(device)
     #     net = net_test_load(model_path, net, device=device) 
     #     torch.cuda.set_device(rank[0])
-        
-    batch_size = args.batch_size # number of samples in an WSI (or a source image)
-    loader = DataLoader(dataset, batch_size = batch_size, shuffle=False)
-    
-    print("Model Inference...")
-    results = []
-    with torch.no_grad(): 
-        net.eval() 
-        loss_arr = []
 
-        for data in tqdm(loader, total = len(loader)):
+    print("Model Prediction...")
+
+    NCHW_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+    NHW_tonumpy = lambda x: x.to('cpu').detach().numpy()
+    fn_denorm = lambda x, mean, std : (x*std) + mean
+
+    if args.output_dim == 'NCHW':
+        fn_convert = lambda x: np.squeeze(NCHW_tonumpy(x), axis=-1)
+    elif args.output_dim == 'NHW':
+        fn_convert = lambda x: NHW_tonumpy(x)
+
+    # ensemble
+    ensemble_scale = args.ens_scale
+    fn_scale_minmax = lambda x : (x-x.min())/(x.max()-x.min())
+    fn_sigmoid = lambda x : 1/(1+ np.exp(-(x.astype('float64')-0.5)))
+    fn_clip = lambda x: np.clip(x, 0, 1)
+    
+    # fn_classifier = lambda x : 1.0 * (x > 0.5)
+    fn_classifier = lambda x : 1.0 * (x > 0)
+
+    if selective:
+        total, total_reject = 0, 0
+
+    # results = []
+
+    # measuring class
+    evaluator = Evaluator(num_class=args.n_cls, selective=selective)
+
+    with torch.no_grad(): 
+        # net.eval()
+        # loss_arr = []
+
+        for data in tqdm(test_loader, total = len(test_loader)):
             # forward
-            
-            labels = data['label'].to(device)
-            inputs = data['input'].to(device)
-            outputs = net(inputs)
+            input = data['input'].to(device)
+            label = data['label'].to(device) # (N, H, W)
+
+            # single model
+            if len(nets) == 1:
+                if not selective:
+                    output = nets[0](input) # (N, H, W) or (N, 2, H, W)
+                else:
+                    output, selection, _ = nets[0](input) # (N, H, W) or (N, 2, H ,W)
+                output = fn_convert(output)
+
+            # ensemble, selective 불가
+            else:
+                outputs = []
+                for net in nets:
+                    output = net(input)
+                    if ensemble_scale == 'None':
+                        outputs.append(fn_convert(output))
+                    elif ensemble_scale == 'clip':
+                        outputs.append(fn_convert(fn_clip(output)))
+                    elif ensemble_scale == 'minmax':
+                        outputs.append(fn_convert(fn_scale_minmax(output)))
+                    elif ensemble_scale == 'sigmoid':
+                        outputs.append(fn_convert(fn_sigmoid(output)))
+                output = np.mean(np.asarray(outputs), axis = 0)
+                del outputs
             
             ids = data['id']
-            inputs = fn_tonumpy(fn_denorm(inputs, mean=0.5, std=0.5))
-            labels = np.squeeze(fn_tonumpy(labels), axis=-1)
-            preds = np.squeeze(fn_tonumpy(fn_classifier(outputs)), axis=-1)
-            probs = np.squeeze(fn_tonumpy(outputs), axis=-1)
-            results.append((ids, inputs, labels, probs, preds))
+            input = NCHW_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
+            label = fn_convert(label).astype('uint8')
 
-    save_dir = args.save_dir
-    result_dir = os.path.join(save_dir, 'model_pred')
-    os.makedirs(result_dir, exist_ok = True)
+            if len(output.shape) == 4:
+                pred = np.argmax(output, axis = -1).astype('uint8')
+            elif len(output.shape) == 3:
+                pred = fn_classifier(output).astype('uint8')
 
-    print("Measure Performance and Save results")
+            if selective:
+                if len(selection.size()) == 4:
+                    _, selection = torch.max(selection, dim=1)
+                elif len(selection.size()) == 3:
+                    selection = fn_classifier(selection)
+                selection = selection.to('cpu').detach().numpy().astype('uint8')
+                total += output.size
+                reject = output.size - selection.sum().item()
+                total_reject += reject
 
-    patch_level_performance =  []
-    for b, (ids, inputs, labels, outputs, preds) in tqdm(enumerate(results), total = len(results)):
-        for j, (id, i, l, o, p) in enumerate(zip(ids, inputs, labels, outputs, preds)): 
-            # save_dir = os.path.join(data_dir, 'patch', parent_dir, f'{patch_mag}x_{patch_size}')
+                evaluator.add_batch(label, pred, selection=selection)
+            else:
+                evaluator.add_batch(label, pred)
+            
+            # label = label.astype('uint8')
+            # pred = pred.astype('uint8')
 
-            # save_dir = os.path.join(result_dir, slide_name)
+            del input, output, pred
+            if selective:
+                del selection
 
-            heatmap = make_heatmap(o)
-            overlay = cv2.addWeighted(i, 0.7, heatmap, 0.3, 0)
+            torch.cuda.empty_cache()
 
-            input = Image.fromarray(np.uint8(i*255)).convert('RGB')
-            label = Image.fromarray(np.uint8(l*255)).convert('L')
-            overlay = Image.fromarray(np.uint8(overlay*255)).convert('RGB')
-            pred = Image.fromarray(np.uint8(p*255)).convert('L')
+            # results.append((ids, input, label, output, pred))
 
-            input.save(os.path.join(result_dir, f'{id}_input.jpg'))
-            label.save(os.path.join(result_dir, f'{id}_label.png'))
-            overlay.save(os.path.join(result_dir, f'{id}_heatmap_overlay.jpg'))
-            pred.save(os.path.join(result_dir, f'{id}_pred.png'))
+    CM = evaluator.Confusion_Matrix()
+    Acc = evaluator.get_Pixel_Accuracy()
+    Acc_class = evaluator.get_Pixel_Accuracy_Class()
+    Prec = evaluator.get_Precision()
+    Recall = evaluator.get_Recall()
+    F1_Score = evaluator.get_F1_Score(Prec, Recall)
+    mIoU = evaluator.get_mIoU()
+    IoU_class = evaluator.get_IoU_Class()
+    # FWIoU = evaluator.get_FWIoU()
 
-            patch_level_performance.append(get_performance(l, o, p))
+    evaluator.reset()
 
-    patch_level_performance = np.nanmean(np.concatenate([patch_level_performance]), axis = 0)
+    if selective:
+        print(f'    rejection ratio: {round(total_reject/total, 3)}')
 
-    print(f'patch-level average | accuracy: {patch_level_performance[0]:.3f} | recall: {patch_level_performance[1]:.3f} | precision: {patch_level_performance[2]:.3f} | f1 score: {patch_level_performance[3]:.3f} | AUC score: {patch_level_performance[4]:.3f}')
+    print("confusion matrix")
+    print(CM)
+    print(f'    Acc:{Acc}')
+    print(f'    Acc_class:{Acc_class}')
+    print(f'    Prec:{Prec}, Recall:{Recall}, F1_Score:{F1_Score}')
+    print(f'    mIoU:{mIoU}')
+    print(f'    IoU_class:{IoU_class}')
+ 
+    # save_dir = args.save_dir
+    # result_dir = os.path.join(save_dir, 'model_pred')
+    # os.makedirs(result_dir, exist_ok = True)
+
+    # print("Measure Performance and Save results")
+
+    # patch_level_performance =  []
+    # for b, (ids, inputs, labels, outputs, preds) in tqdm(enumerate(results), total = len(results)):
+    #     for j, (id, i, l, o, p) in enumerate(zip(ids, inputs, labels, outputs, preds)): 
+    #         # save_dir = os.path.join(data_dir, 'patch', parent_dir, f'{patch_mag}x_{patch_size}')
+
+    #         # save_dir = os.path.join(result_dir, slide_name)
+
+    #         heatmap = make_heatmap(o)
+    #         overlay = cv2.addWeighted(i, 0.7, heatmap, 0.3, 0)
+
+    #         input = Image.fromarray(np.uint8(i*255)).convert('RGB')
+    #         label = Image.fromarray(np.uint8(l*255)).convert('L')
+    #         overlay = Image.fromarray(np.uint8(overlay*255)).convert('RGB')
+    #         pred = Image.fromarray(np.uint8(p*255)).convert('L')
+
+    #         input.save(os.path.join(result_dir, f'{id}_input.jpg'))
+    #         label.save(os.path.join(result_dir, f'{id}_label.png'))
+    #         overlay.save(os.path.join(result_dir, f'{id}_heatmap_overlay.jpg'))
+    #         pred.save(os.path.join(result_dir, f'{id}_pred.png'))
+
+    #         patch_level_performance.append(get_performance(l, o, p))
+
+    # patch_level_performance = np.nanmean(np.concatenate([patch_level_performance]), axis = 0)
+
+    # print(f'patch-level average | accuracy: {patch_level_performance[0]:.3f} | recall: {patch_level_performance[1]:.3f} | precision: {patch_level_performance[2]:.3f} | f1 score: {patch_level_performance[3]:.3f} | AUC score: {patch_level_performance[4]:.3f}')0
     
-    save_performance_as_csv(save_dir=save_dir, performance=patch_level_performance, csv_name = "input-level_average_performance")
+    # save_performance_as_csv(save_dir=save_dir, performance=patch_level_performance, csv_name = "input-level_average_performance")
