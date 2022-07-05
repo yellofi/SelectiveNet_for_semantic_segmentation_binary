@@ -20,19 +20,18 @@ def parse_arguments():
 
     parser.add_argument('--data_dir', type=str, help='WSI data directory',
                         default = '/mnt/hdd1/c-MET_datasets/SLIDE_DATA/DL-based_tumor_seg_dataset/2205_1차anno')
-    parser.add_argument('--model_dir', type=str, help='directory where logs and models would be saved',
-                        default = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/dp')
     
+    parser.add_argument('--fold', type = int, default = 1, help = 'which fold in 5-fold cv')
+    parser.add_argument('--data_type', type=str, default = 'samsung', 
+                        help='samsung have no each fold directory (sample or samsung)')
+
     parser.add_argument('--input_type', type=str, default='RGB')
     parser.add_argument('--patch_mag', type=int, default=200)
     parser.add_argument('--patch_size', type=int, default=256)
     parser.add_argument('--n_cls', type=int, default=2)
 
-    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local rank')
-    parser.add_argument('--fold', type = int, default = 1, help = 'which fold in 5-fold cv')
-    parser.add_argument('--data_type', type=str, default = 'samsung', 
-                        help='samsung have no each fold directory (sample or samsung)')
-
+    parser.add_argument('--model_dir', type=str, help='directory where logs and models would be saved',
+                        default = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/dp')
     parser.add_argument('--model_arch', type=str, default = 'UNet', choices = ['UNet', 'UNet_B'])
     parser.add_argument('--selective', type=bool, default = False)
     parser.add_argument('--s_lamb', type=int, default = 32)
@@ -50,6 +49,8 @@ def parse_arguments():
 
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--n_epoch', type=int, default=100)
+
+    parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local rank')
 
     parser.add_argument('--log_img', type=bool, default = False)
     
@@ -105,7 +106,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
     elif args.lr_sche == 'CosineAnnealingLR':
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max = args.patience, eta_min = args.lr_min)
 
-    # a single gpu or multiple gpus
+    # define a device 
     if len(rank) != 1: # gpu 여러개 쓰고 싶을때, DP 
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     elif len(rank) == 1: # 0번 말고 다른 gpu도 single로 쓰고 싶을때
@@ -133,6 +134,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
 
         print('Load weights from', os.path.join(ckpt_dir, ckpt_lst[-1]))
 
+    # using multi-gpu via DataParallel
     if len(rank) > 1:
         net = torch.nn.DataParallel(net, device_ids=rank)
         net = net.cuda()
@@ -216,7 +218,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
                     _, selection = torch.max(selection, dim=1)
                 elif len(selection.size()) == 3:
                     selection = fn_classifier(selection)
-                selection = selection.to('cpu').detach().numpy().astype('unit8')
+                selection = selection.to('cpu').detach().numpy().astype('uint8')
                 evaluator.add_batch(label, pred, selection=selection)
                 tr_total += label.size
                 reject = label.size - selection.sum().item()
@@ -302,7 +304,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
                         _, selection = torch.max(selection, dim=1)
                     elif len(selection.size()) == 3:
                         selection = fn_classifier(selection)
-                    selection = selection.to('cpu').detach().numpy().astype('unit8')
+                    selection = selection.to('cpu').detach().numpy().astype('uint8')
                     evaluator.add_batch(label, pred, selection=selection)
                     val_total += label.size
                     reject = label.size - selection.sum().item()
