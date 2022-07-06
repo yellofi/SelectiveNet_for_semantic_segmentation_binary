@@ -38,10 +38,15 @@ def parse_arguments():
                         default='*/model', help='network ckpt (.pth) directory')
     parser.add_argument('--model_arch', type=str, nargs = '+',
                         default = ['UNet_B'], choices=['UNet_B'])
-    parser.add_argument('--selective', type=bool, default = False)
+    parser.add_argument('--selective', type=bool, default = False, help = 'Is the network based on SelectiveNet?')
+    parser.add_argument('--select_eval', type=bool, default = True, help = 'calculate metrics with/without selection')
     parser.add_argument('--output_dim', type=str, default = 'NHW', choices=['NCHW', 'NHW'])
-    parser.add_argument('--ens_scale', type=str,
-                        default = 'None', choices=['None', 'clip', 'sigmoid', 'minmax'])
+
+    parser.add_argument('--single_scale', type=str, default = 'sigmoid', choices=['None', 'clip', 'sigmoid', 'minmax'])
+    parser.add_argument('--ens_scale', type=str,default = 'None', choices=['None', 'clip', 'sigmoid', 'minmax'])
+
+    parser.add_argument('--cut_off', type=float, default=0.5, help = 'prob > cut_off -> pred: 1')
+    parser.add_argument('--s_cut_off', type=float, default=0.5, help = 'selection > cut_off -> select: 1')
 
     parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local gpu ids')
     parser.add_argument('--info_print', type=bool, default = False)
@@ -177,23 +182,27 @@ if __name__ == '__main__':
 
     print("Model Prediction...")
 
+    # converting functions
     NCHW_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
     NHW_tonumpy = lambda x: x.to('cpu').detach().numpy()
     fn_denorm = lambda x, mean, std : (x*std) + mean
 
     if args.output_dim == 'NCHW':
-        fn_convert = lambda x: np.squeeze(NCHW_tonumpy(x), axis=-1)
+        fn_tonumpy = lambda x: np.squeeze(NCHW_tonumpy(x), axis=-1)
     elif args.output_dim == 'NHW':
-        fn_convert = lambda x: NHW_tonumpy(x)
+        fn_tonumpy = lambda x: NHW_tonumpy(x)
 
-    # ensemble
+    # output scaling
+    single_scale = args.single_scale
     ensemble_scale = args.ens_scale
     fn_scale_minmax = lambda x : (x-x.min())/(x.max()-x.min())
-    fn_sigmoid = lambda x : 1/(1+ np.exp(-(x.astype('float64')-0.5)))
+    fn_sigmoid = lambda x : 1/(1+ np.exp(-x))
     fn_clip = lambda x: np.clip(x, 0, 1)
     
-    # fn_classifier = lambda x : 1.0 * (x > 0.5)
-    fn_classifier = lambda x : 1.0 * (x > 0)
+    # probability cut-off for classification
+    fn_classifier = lambda x, cut_off : 1.0 * (x > cut_off)
+
+    # actual cut_off sigmoid(raw_cut_off)
 
     if selective:
         total, total_reject = 0, 0
@@ -218,7 +227,7 @@ if __name__ == '__main__':
                     output = nets[0](input) # (N, H, W) or (N, 2, H, W)
                 else:
                     output, selection, _ = nets[0](input) # (N, H, W) or (N, 2, H ,W)
-                output = fn_convert(output)
+                output = fn_tonumpy(output)
 
             # ensemble, selective 불가
             else:
@@ -226,36 +235,45 @@ if __name__ == '__main__':
                 for net in nets:
                     output = net(input)
                     if ensemble_scale == 'None':
-                        outputs.append(fn_convert(output))
+                        outputs.append(fn_tonumpy(output))
                     elif ensemble_scale == 'clip':
-                        outputs.append(fn_convert(fn_clip(output)))
+                        outputs.append(fn_tonumpy(fn_clip(output)))
                     elif ensemble_scale == 'minmax':
-                        outputs.append(fn_convert(fn_scale_minmax(output)))
+                        outputs.append(fn_tonumpy(fn_scale_minmax(output)))
                     elif ensemble_scale == 'sigmoid':
-                        outputs.append(fn_convert(fn_sigmoid(output)))
+                        outputs.append(fn_tonumpy(fn_sigmoid(output)))
                 output = np.mean(np.asarray(outputs), axis = 0)
                 del outputs
             
             ids = data['id']
             input = NCHW_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
-            label = fn_convert(label).astype('uint8')
+            label = NHW_tonumpy(label).astype('uint8')
 
             if len(output.shape) == 4:
                 pred = np.argmax(output, axis = -1).astype('uint8')
             elif len(output.shape) == 3:
-                pred = fn_classifier(output).astype('uint8')
+                if single_scale == 'sigmoid':
+                    output = fn_sigmoid(output)
+                pred = fn_classifier(output, cut_off=args.cut_off).astype('uint8')
 
             if selective:
-                if len(selection.size()) == 4:
-                    _, selection = torch.max(selection, dim=1)
-                elif len(selection.size()) == 3:
-                    selection = fn_classifier(selection)
-                selection = selection.to('cpu').detach().numpy().astype('uint8')
+                selection = fn_tonumpy(selection)
+                if len(selection.shape) == 4:
+                    # _, selection = torch.max(selection, dim=1)
+                    selection = np.argmax(selection, -1).astype('uint8')
+                elif len(selection.shape) == 3:
+                    if single_scale == 'sigmoid':
+                        selection = fn_sigmoid(selection)
+                    selection = fn_classifier(selection, cut_off=args.s_cut_off)
+
                 total += output.size
                 reject = output.size - selection.sum().item()
                 total_reject += reject
 
-                evaluator.add_batch(label, pred, selection=selection)
+                if args.select_eval:
+                    evaluator.add_batch(label, pred, selection=selection)
+                else:
+                    evaluator.add_batch(label, pred)
             else:
                 evaluator.add_batch(label, pred)
             
@@ -285,8 +303,6 @@ if __name__ == '__main__':
     if selective:
         print(f'    rejection ratio: {round(total_reject/total, 3)}')
 
-    print("confusion matrix")
-    print(CM)
     print(f'    Acc:{Acc}')
     print(f'    Acc_class:{Acc_class}')
     print(f'    Prec:{Prec}, Recall:{Recall}, F1_Score:{F1_Score}')
