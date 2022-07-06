@@ -33,8 +33,9 @@ def parse_arguments():
     parser.add_argument('--model_dir', type=str, help='directory where logs and models would be saved',
                         default = '/mnt/hdd1/model/Lung_c-MET IHC_scored/UNet/06_baseline_samsung_data/dp')
     parser.add_argument('--model_arch', type=str, default = 'UNet', choices = ['UNet', 'UNet_B'])
-    parser.add_argument('--selective', type=bool, default = False)
-    parser.add_argument('--s_lamb', type=int, default = 32)
+    parser.add_argument('--selective', type=bool, default = False, help = 'Is the network based on SelectiveNet?')
+    parser.add_argument('--s_lamb', type=int, default = 2, help = 'degree to follow target coverage')
+    parser.add_argument('--output_scale', type=str, default = 'sigmoid', choices=['None', 'clip', 'sigmoid', 'minmax'])
     
     parser.add_argument('--optim', type=str, default='Adam', choices = ['Adam', 'SGD'])
     parser.add_argument('--momentum', type=float, default=0, choices = [0.9])
@@ -140,10 +141,25 @@ def train(args, data_loader, ckpt_dir, log_dir):
         net = net.cuda()
 
     # converting functions
-    fn_denorm = lambda x, mean, std : (x*std) + mean # input -> [0, 1]로 다시 복원하기 위해
-    # fn_classifier = lambda x : 1.0 * (x > 0.5)
-    fn_classifier = lambda x : 1.0 * (x > 0)
+    NCHW_tonumpy = lambda x : x.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+    NHW_tonumpy = lambda x: x.to('cpu').detach().numpy()
+    fn_denorm = lambda x, mean, std : (x*std) + mean
 
+    if args.output_dim == 'NCHW':
+        fn_tonumpy = lambda x: np.squeeze(NCHW_tonumpy(x), axis=-1)
+    elif args.output_dim == 'NHW':
+        fn_tonumpy = lambda x: NHW_tonumpy(x)
+
+    # output scaling
+    output_scale = args.output_scale
+
+    fn_scale_minmax = lambda x : (x-x.min())/(x.max()-x.min())
+    fn_sigmoid = lambda x : 1/(1+ np.exp(-x.astype('float64')))
+    fn_clip = lambda x: np.clip(x, 0, 1)
+    
+
+    # probability cut_off
+    fn_classifier = lambda x : 1.0 * (x > 0.5)
 
     # logs
     writer_train = SummaryWriter(log_dir = os.path.join(log_dir, 'train'))
@@ -174,7 +190,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
         for data in tqdm(loader_train, total = len(loader_train), desc = 'train'):
         
             # forward
-            inputs = data['input'].to(device) # (N, C, H, W)
+            input = data['input'].to(device) # (N, C, H, W)
             label = data['label'] # (N, H, W), torch.int64
 
             if 'BCE' in args.loss:
@@ -182,7 +198,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
             label = label.to(device) # (N, H, W)
 
             if args.selective:
-                output, selection, aux  = net(inputs)
+                output, selection, aux  = net(input)
                 aux_loss = loss_A(aux, label)
                 select_loss, coverage = loss_S(output, selection, target=label, lamb=args.s_lamb)
 
@@ -190,9 +206,8 @@ def train(args, data_loader, ckpt_dir, log_dir):
                 tr_sel_loss_arr += [select_loss.item()]
                 
                 loss = aux_loss + select_loss
-                
             else:
-                output = net(inputs) # (N, 2, H, W) or (N, H, W)
+                output = net(input) # (N, 2, H, W) or (N, H, W)
                 loss = loss_A(output, label)
 
             # backward
@@ -200,29 +215,33 @@ def train(args, data_loader, ckpt_dir, log_dir):
             loss.backward() # gradient backpropagation
             optim.step() # backpropa 된 gradient를 이용해서 각 layer의 parameters update
             
-            inputs = fn_denorm(inputs, mean=0.5, std=0.5).to('cpu').detach().numpy().transpose(0, 2, 3, 1)
-            label = label.to('cpu').detach().numpy()
+            output = fn_tonumpy(output)
 
-            if len(output.size()) == 4:
-                output = output.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
-                pred = np.argmax(output, axis=-1) # (N, H, W, C) -> (N, H, W), [0.2, 0.7, 0.1] -> [1] 
-            elif len(output.size()) == 3:
-                output = output.to('cpu').detach().numpy()
-                pred = fn_classifier(output) # binary class 0.4 -> 0, 0.6 -> 1
+            input = NCHW_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
+            label = NHW_tonumpy(label).astype('uint8')
 
-            label = label.astype('uint8')
-            pred = pred.astype('uint8')
+            if len(output.shape) == 4:
+                pred = np.argmax(output, axis=-1).astype('uint8') # (N, H, W, C) -> (N, H, W), [0.2, 0.7, 0.1] -> [1] 
+            elif len(output.shape) == 3:
+                if output_scale == 'sigmoid':
+                    output = fn_sigmoid(output)
+                pred = fn_classifier(output).astype('uint8') # binary class 0.4 -> 0, 0.6 -> 1
      
             if args.selective:
-                if len(selection.size()) == 4:
-                    _, selection = torch.max(selection, dim=1)
-                elif len(selection.size()) == 3:
+                selection = fn_tonumpy(selection)
+                if len(selection.shape) == 4:
+                    # _, selection = torch.max(selection, dim=1)
+                    selection = np.argmax(selection, -1).astype('uint8')
+                elif len(selection.shape) == 3:
+                    if output_scale == 'sigmoid':
+                        selection = fn_sigmoid(selection)
                     selection = fn_classifier(selection)
-                selection = selection.to('cpu').detach().numpy().astype('uint8')
-                evaluator.add_batch(label, pred, selection=selection)
+                
                 tr_total += label.size
                 reject = label.size - selection.sum().item()
                 tr_total_reject += reject
+
+                evaluator.add_batch(label, pred, selection=selection)
             else:
                 evaluator.add_batch(label, pred)
 
@@ -248,11 +267,11 @@ def train(args, data_loader, ckpt_dir, log_dir):
             writer_train.add_scalar('selection loss', np.mean(tr_sel_loss_arr), epoch)
             writer_train.add_scalar('rejection ratio', tr_total_reject/tr_total, epoch)
 
-        # print(inputs[:5, :, :, :].shape)
+        # print(input[:5, :, :, :].shape)
         # print(np.expand_dims(label[:5, :, :], axis = -1).shape)
         # print(np.expand_dims(pred[:5, :, :], axis = -1).shape)
         if args.log_img:
-            writer_train.add_images('input', inputs[:5, :, :, :], epoch, dataformats='NHWC')
+            writer_train.add_images('input', input[:5, :, :, :], epoch, dataformats='NHWC')
             writer_train.add_images('label', np.expand_dims(label[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
             writer_train.add_images('pred', np.expand_dims(pred[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
             if args.selective:
@@ -265,7 +284,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
 
             for data in tqdm(loader_val, total = len(loader_val), desc = 'valid'):
                 # forward
-                inputs = data['input'].to(device) # (N, C, H, W)
+                input = data['input'].to(device) # (N, C, H, W)
                 label = data['label'] # (N, H, W), torch.int64 (Long)
 
                 if 'BCE' in args.loss:
@@ -274,7 +293,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
                 label = label.to(device) # (N, H, W)
                 
                 if args.selective:
-                    output, selection, aux  = net(inputs)
+                    output, selection, aux  = net(input)
                     aux_loss = loss_A(aux, label)
                     select_loss, coverage = loss_S(output, selection, label, lamb=args.s_lamb)
 
@@ -283,32 +302,37 @@ def train(args, data_loader, ckpt_dir, log_dir):
 
                     loss = aux_loss + select_loss
                 else:
-                    output = net(inputs)
+                    output = net(input)
                     loss = loss_A(output, label)
 
-                inputs = fn_denorm(inputs, mean=0.5, std=0.5).to('cpu').detach().numpy().transpose(0, 2, 3, 1)
-                label = label.to('cpu').detach().numpy()
+                output = fn_tonumpy(output)
 
-                if len(output.size()) == 4:
-                    output = output.to('cpu').detach().numpy().transpose(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
-                    pred = np.argmax(output, axis=-1) # (N, H, W, C) -> (N, H, W), [0.2, 0.7, 0.1] -> [1] 
-                elif len(output.size()) == 3:
+                input = NCHW_tonumpy(fn_denorm(input, mean=0.5, std=0.5))
+                label = NHW_tonumpy(label).astype('uint8')
+
+                if len(output.shape) == 4:
+                    pred = np.argmax(output, axis=-1).astype('uint8') # (N, H, W, C) -> (N, H, W), [0.2, 0.7, 0.1] -> [1] 
+                elif len(output.shape) == 3:
                     output = output.to('cpu').detach().numpy()
-                    pred = fn_classifier(output) # binary class 0.4 -> 0, 0.6 -> 1
-
-                label = label.astype('uint8')
-                pred = pred.astype('uint8')
+                    if output_scale == 'sigmoid':
+                        output = fn_sigmoid(output)
+                    pred = fn_classifier(output).astype('uint8') # binary class 0.4 -> 0, 0.6 -> 1
 
                 if args.selective:
-                    if len(selection.size()) == 4:
-                        _, selection = torch.max(selection, dim=1)
-                    elif len(selection.size()) == 3:
+                    selection = fn_tonumpy(selection)
+                    if len(selection.shape) == 4:
+                        # _, selection = torch.max(selection, dim=1)
+                        selection = np.argmax(selection, -1).astype('uint8')
+                    elif len(selection.shape) == 3:
+                        if output_scale == 'sigmoid':
+                            selection = fn_sigmoid(selection)
                         selection = fn_classifier(selection)
-                    selection = selection.to('cpu').detach().numpy().astype('uint8')
-                    evaluator.add_batch(label, pred, selection=selection)
+                        
                     val_total += label.size
                     reject = label.size - selection.sum().item()
                     val_total_reject += reject
+
+                    evaluator.add_batch(label, pred, selection=selection)
                 else:
                     evaluator.add_batch(label, pred)
 
@@ -320,7 +344,7 @@ def train(args, data_loader, ckpt_dir, log_dir):
         writer_val.add_scalar('loss', np.mean(val_loss_arr), epoch)
         writer_val.add_scalar('accuracy', val_acc, epoch)
 
-        # writer_val.add_images('input', inputs[:5, :, :, :], epoch, dataformats='NHWC')
+        # writer_val.add_images('input', input[:5, :, :, :], epoch, dataformats='NHWC')
         # writer_val.add_images('label', np.expand_dims(label[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
         # writer_val.add_images('pred', np.expand_dims(pred[:5, :, :]*255, axis = -1),  epoch, dataformats='NHWC')
 
