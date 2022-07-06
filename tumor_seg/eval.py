@@ -39,7 +39,7 @@ def parse_arguments():
     parser.add_argument('--model_arch', type=str, nargs = '+',
                         default = ['UNet_B'], choices=['UNet_B'])
     parser.add_argument('--selective', type=bool, default = False, help = 'Is the network based on SelectiveNet?')
-    parser.add_argument('--select_eval', type=bool, default = True, help = 'calculate metrics with/without selection')
+    parser.add_argument('--select_eval', type=bool, default = False, help = 'calculate metrics with/without selection')
     parser.add_argument('--output_dim', type=str, default = 'NHW', choices=['NCHW', 'NHW'])
 
     parser.add_argument('--single_scale', type=str, default = 'sigmoid', choices=['None', 'clip', 'sigmoid', 'minmax'])
@@ -256,7 +256,7 @@ if __name__ == '__main__':
                     output = fn_sigmoid(output)
                 pred = fn_classifier(output, cut_off=args.cut_off).astype('uint8')
 
-            if selective:
+            if selective and args.select_eval:
                 selection = fn_tonumpy(selection)
                 if len(selection.shape) == 4:
                     # _, selection = torch.max(selection, dim=1)
@@ -270,10 +270,7 @@ if __name__ == '__main__':
                 reject = output.size - selection.sum().item()
                 total_reject += reject
 
-                if args.select_eval:
-                    evaluator.add_batch(label, pred, selection=selection)
-                else:
-                    evaluator.add_batch(label, pred)
+                evaluator.add_batch(label, pred, selection=selection)
             else:
                 evaluator.add_batch(label, pred)
             
