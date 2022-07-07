@@ -61,7 +61,9 @@ def parse_arguments():
 
     parser.add_argument('--cut_off', type=float, default=0.5, help = 'prob > cut_off -> pred: 1')
     parser.add_argument('--s_cut_off', type=float, default=0.5, help = 'selection > cut_off -> select: 1')
-                
+
+    parser.add_argument('--reject_mask', type=bool, default = False, help = 'extract or don not extract a reject mask together')
+
     parser.add_argument('--local_rank', type=int, nargs='+', default=[0], help='local gpu ids')
     parser.add_argument('--info_print', type=bool, default = False)
 
@@ -316,6 +318,8 @@ def main(args, slide_path, ROI_path):
 
     total_time += patch_loader_time
 
+    print(f'    # of patch: {len(xy_coord)}')
+
     if args.info_print:
         print(f'    slide mag: {slide_mag}')
         print(f'    slide mpp: {slide_mpp}')
@@ -324,7 +328,7 @@ def main(args, slide_path, ROI_path):
         print(f'    patch size: {patch_size}')
         print(f'    patch stride: {patch_stride}')
         print(f'    slide/patch ratio: {slide_patch_ratio}') 
-        print(f'    # of patch: {len(xy_coord)}')
+        
         print(f'    batch size: {batch_size}')
         print(f'    num workers: {num_workers}')
         print(f'    Patch Loader Time: {round(patch_loader_time, 2)} sec')
@@ -455,7 +459,7 @@ def main(args, slide_path, ROI_path):
     with torch.no_grad():
         # net.eval()
 
-        for data in tqdm(test_loader, total = len(test_loader), desc = '   model inference'):
+        for data in tqdm(test_loader, total = len(test_loader), desc ='    model prediction'):
             input = data['input'].to(device)
             x, y = data['x'], data['y']
 
@@ -560,13 +564,14 @@ def main(args, slide_path, ROI_path):
         tumor_mask = mask
         tumor_mask = cv2.medianBlur(tumor_mask, kernel_size)
         mask_list = [tumor_mask]
-    elif selective:
-        tumor_mask = mask[0, :, :]
-        tumor_mask = cv2.medianBlur(tumor_mask, kernel_size)
-        reject_mask = mask[1, :, :]
-        reject_mask = cv2.medianBlur(reject_mask, 15)
-
-        mask_list = [tumor_mask, reject_mask]
+    else:
+        tumor_mask_on_select = mask[0, :, :]
+        tumor_mask_on_select = cv2.medianBlur(tumor_mask_on_select, kernel_size)
+        mask_list = [tumor_mask_on_select]
+        if args.reject_mask:
+            reject_mask = mask[1, :, :]
+            reject_mask = cv2.medianBlur(reject_mask, 15)
+            mask_list = [tumor_mask_on_select, reject_mask]
 
     end_time = time.time()
     wsi_mask_time += (end_time - start_time)
@@ -583,7 +588,7 @@ def main(args, slide_path, ROI_path):
     pattern_list = [tumor_pattern]
     color_list = [tumor_color]
     
-    if selective:
+    if args.reject_mask:
         reject_color = "-7667457"
         reject_pattern = "Uncertain"
         pattern_list.append(reject_pattern)
@@ -627,11 +632,11 @@ if __name__ == "__main__":
         ROI_path = os.path.join(args.ROI_dir, ROI_file)
         main(args, slide_path, ROI_path)
     else:
-        # issues = [118]
-        # slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
+        issues = [118]
+        slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) not in issues])
         
-        target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
-        slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
+        # target_slides = [27, 32, 47, 59, 80, 87, 90, 94, 106, 107]
+        # slide_list = sorted([svs for svs in os.listdir(slide_dir) if 'svs' in svs and int(svs.split('-')[1][2:]) in target_slides])
 
         total_time = 0
         for i, (slide_file) in enumerate(slide_list):
