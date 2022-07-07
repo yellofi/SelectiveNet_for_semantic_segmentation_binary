@@ -202,15 +202,15 @@ if __name__ == '__main__':
     # probability cut-off for classification
     fn_classifier = lambda x, cut_off : 1.0 * (x > cut_off)
 
-    # actual cut_off sigmoid(raw_cut_off)
+    select_eval = args.select_eval
 
-    if selective:
+    if select_eval:
         total, total_reject = 0, 0
 
     # results = []
 
     # measuring class
-    evaluator = Evaluator(num_class=args.n_cls, selective=selective)
+    evaluator = Evaluator(num_class=args.n_cls, selective=args.select_eval)
 
     with torch.no_grad(): 
         # net.eval()
@@ -256,7 +256,7 @@ if __name__ == '__main__':
                     output = fn_sigmoid(output)
                 pred = fn_classifier(output, cut_off=args.cut_off).astype('uint8')
 
-            if selective and args.select_eval:
+            if select_eval:
                 selection = fn_tonumpy(selection)
                 if len(selection.shape) == 4:
                     # _, selection = torch.max(selection, dim=1)
@@ -273,9 +273,6 @@ if __name__ == '__main__':
                 evaluator.add_batch(label, pred, selection=selection)
             else:
                 evaluator.add_batch(label, pred)
-            
-            # label = label.astype('uint8')
-            # pred = pred.astype('uint8')
 
             del input, output, pred
             if selective:
@@ -297,7 +294,7 @@ if __name__ == '__main__':
 
     evaluator.reset()
 
-    if selective:
+    if select_eval:
         print(f'    rejection ratio: {round(total_reject/total, 3)}')
 
     print(f'    Acc:{Acc}')
