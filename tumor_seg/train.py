@@ -35,6 +35,7 @@ def parse_arguments():
     parser.add_argument('--model_arch', type=str, default = 'UNet', choices = ['UNet', 'UNet_B'])
     parser.add_argument('--selective', type=bool, default = False, help = 'Is the network based on SelectiveNet?')
     parser.add_argument('--s_lamb', type=int, default = 2, help = 'degree to follow target coverage')
+    parser.add_argument('--output_dim', type=str, default = 'NHW', choices=['NCHW', 'NHW'])
     parser.add_argument('--output_scale', type=str, default = 'sigmoid', choices=['None', 'clip', 'sigmoid', 'minmax'])
     
     parser.add_argument('--optim', type=str, default='Adam', choices = ['Adam', 'SGD'])
@@ -313,7 +314,6 @@ def train(args, data_loader, ckpt_dir, log_dir):
                 if len(output.shape) == 4:
                     pred = np.argmax(output, axis=-1).astype('uint8') # (N, H, W, C) -> (N, H, W), [0.2, 0.7, 0.1] -> [1] 
                 elif len(output.shape) == 3:
-                    output = output.to('cpu').detach().numpy()
                     if output_scale == 'sigmoid':
                         output = fn_sigmoid(output)
                     pred = fn_classifier(output).astype('uint8') # binary class 0.4 -> 0, 0.6 -> 1
