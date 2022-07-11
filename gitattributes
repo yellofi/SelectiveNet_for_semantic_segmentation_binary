@@ -1,4 +1,4 @@
-jupyter/** linguist-documentation=false
-jupyter/** linguist-vendored=false
+jupyters/** linguist-documentation=false
+jupyters/** linguist-vendored=false
 
 *.python linguist-detectable=true
