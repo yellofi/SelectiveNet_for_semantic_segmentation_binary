@@ -64,19 +64,18 @@ python3 eval.py --fold 1 \
                 --local_rank 0 1 2 3 4 5 6 7 
                       
 ```
+you have to assign select_eval as 1 in order to conduct in-coverage assessment
++ --select_eval 1
+
 if you don't assign select_eval 1, assessment witout selection will be conducted
 
 you can use a certain single gpu and multiple-gpus including gpu:0 
-ex)
---local_rank 0 
---local_rank 2
---local_rank 0 1 2 3
-
-you have to assign select_eval as 1 in order to conduct in-coverage assessment
---select_eval 1
++ --local_rank 0 
++ --local_rank 2
++ --local_rank 0 1 2 3
 
 you have to assign gpu:0 to use DataParallel 
-(X) --local_rank 1 2 3
++ --local_rank 1 2 3 (X)
 
 ### Qunatitative Results
 
